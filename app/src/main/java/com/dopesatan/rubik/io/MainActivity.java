@@ -1,6 +1,5 @@
 package com.dopesatan.rubik.io;
 
-import android.content.Intent;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -34,8 +33,8 @@ public class MainActivity extends AppCompatActivity {
         mywebView=(WebView) findViewById(R.id.webview);
         mywebView.setWebViewClient(new WebViewClient());
         overlay_relative = (RelativeLayout) findViewById(R.id.overlay_relative);
-        Toast.makeText(MainActivity.this, "Shuffling Cube", Toast.LENGTH_SHORT).show();
-        mywebView.loadUrl("file:///android_asset/rubiks/logos/2014/rubiks/iframe/index.html");
+        Toast.makeText(MainActivity.this, "Shuffling Puzzle", Toast.LENGTH_SHORT).show();
+        mywebView.loadUrl("file:///android_asset/fto/index.html");
         WebSettings webSettings=mywebView.getSettings();
         WebSettings setting = mywebView.getSettings();
         setting.setBuiltInZoomControls(true);
@@ -109,8 +108,8 @@ public class MainActivity extends AppCompatActivity {
         shuffle.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                navigateUpTo(new Intent(MainActivity.this, MainActivity.class));
-                startActivity(getIntent());
+                mywebView.evaluateJavascript("window.ftoScramble()", null);
+                Toast.makeText(MainActivity.this, "Shuffling Puzzle", Toast.LENGTH_SHORT).show();
             }
         });
 
