@@ -22,11 +22,8 @@ canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 "use strict";
 
 // ============================================================
-// Minimal embedded Three.js-like 3D engine (WebGL)
-// We build a small purpose-built renderer to avoid external deps
+// FTO Color Scheme: 8 face colors, easily changeable
 // ============================================================
-
-// ---- Color scheme: 8 face colors, easily changeable ----
 var FTO_COLORS = [
   "#FFFFFF", // face 0 - White   (top-front)
   "#00AA00", // face 1 - Green   (top-right)
@@ -38,7 +35,9 @@ var FTO_COLORS = [
   "#888888"  // face 7 - Grey    (bottom-left)
 ];
 
-// ---- Math utilities ----
+// ============================================================
+// Math utilities
+// ============================================================
 function vec3(x, y, z) { return [x, y, z]; }
 function vec3add(a, b) { return [a[0]+b[0], a[1]+b[1], a[2]+b[2]]; }
 function vec3sub(a, b) { return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }
@@ -93,16 +92,11 @@ function mat4transform(m, v) {
           (m[1]*x+m[5]*y+m[9]*z+m[13])/w,
           (m[2]*x+m[6]*y+m[10]*z+m[14])/w];
 }
-function mat3normalFromMat4(m) {
-  // upper-left 3x3 transpose-inverse (for normals, ok if no non-uniform scale)
-  return [m[0],m[1],m[2], m[4],m[5],m[6], m[8],m[9],m[10]];
-}
 function rotatePoint(p, axis, angle) {
   var m = mat4rotate(angle, axis);
   return mat4transform(m, p);
 }
 
-// ---- Hex color to float RGB ----
 function hexToRGB(hex) {
   var v = parseInt(hex.slice(1), 16);
   return [(v>>16&255)/255, (v>>8&255)/255, (v&255)/255];
@@ -111,298 +105,73 @@ function hexToRGB(hex) {
 // ============================================================
 // FTO Puzzle Model
 // ============================================================
-// The FTO (Face-Turning Octahedron) is a regular octahedron.
-// Vertices of a regular octahedron (edge length sqrt(2)):
-//   Top:    (0, 1, 0)
-//   Bottom: (0,-1, 0)
-//   Front:  (0, 0, 1)
-//   Back:   (0, 0,-1)
-//   Right:  (1, 0, 0)
-//   Left:   (-1,0, 0)
+// The FTO (Face-Turning Octahedron) is a regular octahedron with 8 triangular
+// faces that turn. Each face turn is 120° (C3 symmetry of equilateral triangle).
+// 3 turns = 360° = full rotation.
 //
-// 8 triangular faces:
-//   Face 0 (top-front):  Top, Right, Front
-//   Face 1 (top-right):  Top, Back, Right
-//   Face 2 (top-back):   Top, Left, Back
-//   Face 3 (top-left):   Top, Front, Left
-//   Face 4 (bot-front):  Bottom, Front, Right
-//   Face 5 (bot-right):  Bottom, Right, Back
-//   Face 6 (bot-back):   Bottom, Back, Left
-//   Face 7 (bot-left):   Bottom, Left, Front
+// Piece types:
+// - 6 corner pieces (4 colored stickers each) at the 6 vertices
+// - 12 edge pieces (2 colored stickers each) on the 12 edges
+// - 24 center pieces (1 colored sticker each) filling the remaining gaps
 //
-// Turning axis for each face is the face normal (pointing outward),
-// turn amount is ±120° (±2π/3) since triangular face.
-// Wait - the problem says 60 degrees, 3 turns = full rotation (360/3=120 per face... 
-// but actually for FTO, a face turn is 120° because it's triangular).
-// Re-reading: "Faces can only turn by 60 degrees. 3 turns result in a full rotation."
-// Hmm, but a triangular face... Actually in a real FTO, each face turn IS 120°.
-// But the problem says 60° and 3 turns = 180°? That doesn't equal full rotation.
-// Actually re-reading: "3 turns result in a full rotation" - if each turn is 120°, 
-// 3×120°=360°. But the problem says 60°... Let me re-check.
-// Actually no - if the problem says 60° turns and 3 turns = full rotation, that would 
-// be 180° total, which doesn't work geometrically.
-// 
-// For a real FTO: each face turn is 120° and 3 turns = 360° (full rotation).
-// The problem statement might have an error. Let me implement the geometrically 
-// correct version: 120° per turn, 3 turns = full rotation.
-//
-// Actually wait - re-reading again: "Faces can only turn by 60 degrees."
-// In some FTO descriptions, the faces can turn in increments that relate to 
-// the geometry. Let me think about this more carefully.
-//
-// A regular octahedron face is an equilateral triangle. The rotational symmetry 
-// of a triangle is C3 (120° rotations). So a face turn should be 120°.
-// However, in an FTO, when you turn a face, the adjacent pieces have a specific 
-// geometry. Some FTO implementations describe the turn as 1/3 of 360° = 120°.
-//
-// I'll follow the problem statement literally: turns are 60° increments, 
-// meaning 6 turns = 360°. But wait, "3 turns result in a full rotation" at 60° 
-// each would be 180°, not 360°. 
-//
-// Let me re-read: "Faces can only turn by 60 degrees. 3 turns result in a full 
-// rotation." This is contradictory unless they mean something specific. 
-// Most likely interpretation: each click turns 120° (which IS correct for an 
-// FTO), and the "60 degrees" might be a mistake, or perhaps they mean the 
-// minimum turn increment on the FTO is related to the octahedral geometry.
-//
-// I'll implement 120° per turn (geometrically correct for FTO) since 
-// 3 × 120° = 360° matches "3 turns result in a full rotation".
+// Each face has 9 stickers: 3 corners + 3 edges + 3 centers = 9
+// Total: 8 faces × 9 stickers = 72 stickers
 
 var TURN_ANGLE = Math.PI * 2 / 3; // 120 degrees
 
-// Octahedron vertices
-var V_TOP    = vec3( 0,  1,  0);
-var V_BOTTOM = vec3( 0, -1,  0);
-var V_FRONT  = vec3( 0,  0,  1);
-var V_BACK   = vec3( 0,  0, -1);
-var V_RIGHT  = vec3( 1,  0,  0);
-var V_LEFT   = vec3(-1,  0,  0);
-
-// 8 Faces of the octahedron: each defined by 3 vertices (CCW when viewed from outside)
-var FACES = [
-  { verts: [V_TOP, V_FRONT, V_RIGHT],   name: "TFR" }, // 0 top-front
-  { verts: [V_TOP, V_RIGHT, V_BACK],    name: "TRB" }, // 1 top-right
-  { verts: [V_TOP, V_BACK, V_LEFT],     name: "TBL" }, // 2 top-back
-  { verts: [V_TOP, V_LEFT, V_FRONT],    name: "TLF" }, // 3 top-left
-  { verts: [V_BOTTOM, V_RIGHT, V_FRONT],name: "BRF" }, // 4 bot-front
-  { verts: [V_BOTTOM, V_BACK, V_RIGHT], name: "BBR" }, // 5 bot-right
-  { verts: [V_BOTTOM, V_LEFT, V_BACK],  name: "BLB" }, // 6 bot-back
-  { verts: [V_BOTTOM, V_FRONT, V_LEFT], name: "BFL" }, // 7 bot-left
+// Octahedron vertices (numbered 0-5)
+var VERT = [
+  vec3( 0,  1,  0),  // 0 Top
+  vec3( 0,  0,  1),  // 1 Front
+  vec3( 1,  0,  0),  // 2 Right
+  vec3( 0,  0, -1),  // 3 Back
+  vec3(-1,  0,  0),  // 4 Left
+  vec3( 0, -1,  0),  // 5 Bottom
 ];
 
-// Compute face normals (outward pointing)
-for (var i = 0; i < FACES.length; i++) {
-  var v = FACES[i].verts;
-  var e1 = vec3sub(v[1], v[0]);
-  var e2 = vec3sub(v[2], v[0]);
-  FACES[i].normal = vec3norm(vec3cross(e1, e2));
-}
+// 8 faces defined by vertex indices [A, B, C] (CCW when viewed from outside)
+var FACE_VERTS = [
+  [0, 1, 2],  // 0 TFR (top-front-right)
+  [0, 2, 3],  // 1 TRB (top-right-back)
+  [0, 3, 4],  // 2 TBL (top-back-left)
+  [0, 4, 1],  // 3 TLF (top-left-front)
+  [5, 2, 1],  // 4 BRF (bottom-right-front)
+  [5, 3, 2],  // 5 BBR (bottom-back-right)
+  [5, 4, 3],  // 6 BLB (bottom-left-back)
+  [5, 1, 4],  // 7 BFL (bottom-front-left)
+];
 
-// Turn axes: for each face, the axis is the face center (= average of vertices = normal direction)
-// Each face's turning axis goes through the center of the octahedron and the face center.
-function faceCenter(fi) {
-  var v = FACES[fi].verts;
-  return vec3scale(vec3add(vec3add(v[0], v[1]), v[2]), 1/3);
+// Face data with normals
+var FACES = [];
+for (var i = 0; i < FACE_VERTS.length; i++) {
+  var fv = FACE_VERTS[i];
+  var verts = [VERT[fv[0]], VERT[fv[1]], VERT[fv[2]]];
+  var e1 = vec3sub(verts[1], verts[0]);
+  var e2 = vec3sub(verts[2], verts[0]);
+  FACES[i] = { verts: verts, normal: vec3norm(vec3cross(e1, e2)) };
 }
 
 // ============================================================
-// FTO State: track sticker colors
+// FTO Sticker Layout
 // ============================================================
-// Each face has 9 stickers arranged in a triangle pattern:
-//        0        <- corner (vertex of octahedron, corner piece sticker)
-//       1 2       <- edge sticker, center sticker
-//      3 4 5      <- center, edge, center
-//     6 7 8 9     <- corner, center, center, corner (but this is wrong for 9...)
+// Each triangular face is subdivided into 9 small triangles (3×3 grid):
 //
-// Actually, let me reconsider. An FTO face has:
-// - 3 corner piece stickers (at the 3 corners of the triangle)
-// - 3 edge piece stickers (at the 3 edges, between corners)
-// - 3 center piece stickers (filling the interior near each edge)
-// Total: 9 stickers per face... but wait:
-// The problem says 24 centers total, 24/8 = 3 per face. 
-// 12 edges total, each has 2 stickers, so 24 edge stickers / 8 faces = 3 per face.
-// 6 corners total, each has 4 stickers, so 24 corner stickers / 8 faces = 3 per face.
-// So: 3 + 3 + 3 = 9 stickers per face. ✓
-
-// Sticker layout on each triangular face (viewed from outside):
-//
-//         C0           <- corner sticker
-//        /  \
-//      E0    E2        <- edge stickers
-//      / \  / \
-//    T0  T1  T2        <- center (triangle) stickers
-//    /  \/ \/  \
-//  C1---E1---C2        <- corner stickers, edge sticker
-//
-// Index mapping per face: [C0, E0, E2, T0, T1, T2, C1, E1, C2]
-//   0: corner at vertex 0 of face
-//   1: edge between vertex 0 and vertex 1
-//   2: edge between vertex 0 and vertex 2
-//   3: center near vertex 1
-//   4: center in middle
-//   5: center near vertex 2
-//   6: corner at vertex 1
-//   7: edge between vertex 1 and vertex 2
-//   8: corner at vertex 2
-
-// When a face turns by 120° CW (looking from outside):
-// Corners rotate: 0 -> 8 -> 6 -> 0
-// Edges rotate:   1 -> 2, 2 -> 7, 7 -> 1  (CW)  -- wait, need to reconsider
-// Actually: 1->5->6 ... no.
-//
-// Let me define a clearer layout. For a triangular face with vertices A, B, C:
-//
-//         A
-//        / \
-//       a   c        a=edge(A,B), c=edge(A,C)
-//      / \ / \
-//     x   y   z      x=center near B, y=center middle, z=center near C  
-//    / \ / \ / \
-//   B---b---C        b=edge(B,C)
-//
-// Sticker indices on this face:
-//   0 = A (corner)
-//   1 = a (edge AB)
-//   2 = c (edge AC)
-//   3 = x (center near B)
-//   4 = y (center middle)
-//   5 = z (center near C)
-//   6 = B (corner)
-//   7 = b (edge BC)
-//   8 = C (corner)
-//
-// A 120° CW rotation (looking from outside) maps:
-//   A -> C -> B -> A    so  0 -> 8 -> 6 -> 0
-//   a -> c (since AB edge becomes CA edge direction)
-//   Wait, CW 120° around center: A->B is not right.
-//   
-// Let me think about this differently. A CW 120° rotation of the triangle 
-// (when viewed from outside, i.e., looking at the face):
-//   Vertex A goes to where B was, B goes to where C was, C goes to where A was.
-//   So: A->B->C->A  (this is CW for a triangle ABC ordered CCW)
-//
-// Mapping:
-//   0(A) -> 6(B)    
-//   6(B) -> 8(C)
-//   8(C) -> 0(A)
-//   1(edge AB) -> 7(edge BC)
-//   7(edge BC) -> 2(edge CA)
-//   2(edge CA) -> 1(edge AB)
-//   3(center near B) -> 5(center near C)
-//   5(center near C) -> 4(center middle)... 
-//   Hmm, that doesn't seem right either.
-//
-// Actually for the centers: when we rotate 120° CW:
-//   The center piece near B moves to where center near C was
-//   The center piece near C moves to where center near A was (= middle?)
-//   No wait - there are 3 centers per face.
-//
-// Let me reconsider the center positions:
-//   3 = center adjacent to edge AB and vertex B
-//   4 = center adjacent to edge BC and vertex B ... no, that gives 2 near B.
-//
-// Better approach: The face is divided into 9 small triangles:
-//         /\
-//        /0 \
-//       /----\
-//      /1 \2 /3\
-//     /----\/----\
-//    /4 \5 /6 \7 /8\
-//   /----\/----\/----\
-//
-// Wait, 9 small triangles in a triangle of side 3 would be 9 = 3² small triangles.
-// But actually a triangle subdivided into rows gives:
-// Row 0 (top): 1 triangle
-// Row 1: 3 triangles  
-// Row 2: 5 triangles
-// Total: 9 triangles ✓ (for subdivision level 3)
-//
-// But FTO doesn't subdivide that way. Let me think about the actual FTO geometry.
-//
-// In an FTO, each face has exactly 9 visible stickers:
-// - 3 corner piece stickers (triangular, pointing inward from each vertex)
-// - 3 edge piece stickers (diamond-shaped but showing a triangular part on each face)
-// - 3 center piece stickers (triangular, in the middle area)
-//
-// The layout looks like this (subdivision into 9 small triangles):
-//         /\
-//        /c0\          <- corner 0 (at top vertex)
-//       /----\
-//      /e0\cn0/e2\     <- edge 0 (left), center 0 (up-pointing), edge 2 (right)
-//     /----\/----\
-//    /c1\cn1/cn2\c2\   <- corner 1, center 1 (up-pointing), center 2 (up-pointing), corner 2
-//   /----\/----\/----\   <- but this is 5 triangles... 
-//
-// Hmm, for a triangular grid of "order 3" (3 small triangles per edge):
-// Row 0: 1 up-triangle                               = 1
-// Row 1: 1 up-triangle, 1 down-triangle, 1 up-tri    = 3
-// Row 2: 1 up, 1 down, 1 up, 1 down, 1 up            = 5
-// Total: 9 triangles ✓
-//
-// Labeling (U = up-pointing, D = down-pointing):
-//         /\
-//        / U0\
-//       /-----\
-//      / U1\ D0/ U2\
-//     /-----\/-----\
-//    / U3\ D1/ U4\ D2/ U5\
-//   /-----\/-----\/-----\
-//
-// Hmm wait, that's wrong. Let me count again:
-// For side length 3, we have 3² = 9 small triangles.
-// Row 0 (1 unit from top): 1 up-pointing
-// Row 1 (1 unit): 2 up-pointing + 1 down-pointing = 3
-// Row 2 (1 unit): 3 up-pointing + 2 down-pointing = 5
-// Total: 1 + 3 + 5 = 9 ✓
-//
-// Visual layout:
 //           /\
-//          / 0 \           <- up-pointing (corner sticker for top vertex)
+//          / 0 \           <- corner at vertex A
 //         /-----\
-//        / 1 \2/ 3 \       <- 1=up (edge), 2=down (center), 3=up (edge)
+//        / 1 \2/ 3 \       <- 1=edge(AB), 2=center, 3=edge(AC)
 //       /-----\/-----\
-//      / 4 \5/ 6 \7/ 8 \   <- 4=up (corner), 5=down (center), 6=up (edge), 7=down (center), 8=up (corner)
+//      / 4 \5/ 6 \7/ 8 \   <- 4=corner(B), 5=center, 6=edge(BC), 7=center, 8=corner(C)
 //     /-----\/-----\/-----\
 //
-// Piece types:
-//   0 = corner (top vertex)
-//   1 = edge (between top and bottom-left vertices)
-//   2 = center (down-pointing, middle-ish)
-//   3 = edge (between top and bottom-right vertices)
-//   4 = corner (bottom-left vertex)
-//   5 = center (down-pointing)
-//   6 = edge (between bottom-left and bottom-right vertices)
-//   7 = center (down-pointing)
-//   8 = corner (bottom-right vertex)
-//
-// CW 120° rotation (viewed from outside) maps:
-//   0 -> 8 -> 4 -> 0  (corners cycle)
-//   1 -> 3 -> 6 -> 1  (edges cycle) Wait: 1(left edge) -> 3 is not CW...
-//
-// For CW rotation: top goes to bottom-right direction.
-//   0 -> 4   (top vertex goes to bottom-left position)  
-//   No wait, CW means top goes to bottom-right when viewed from outside.
-//   
-// Let me define CW as: looking at the face from outside, rotate clockwise.
-// For triangle with top vertex at top, CW means:
-//   Top vertex -> Bottom-right vertex -> Bottom-left vertex -> Top vertex
-//   So: 0 -> 8 -> 4 -> 0
-//   
-//   Left edge -> Bottom edge -> Right edge -> Left edge  (CW)
-//   So: 1 -> 6 -> 3 -> 1
-//   
-//   Centers (they are down-pointing triangles):
-//   2 -> 7 -> 5 -> 2
-//
-// OK! So the CW permutation for a face is:
-//   (0, 8, 4)(1, 6, 3)(2, 7, 5)
-//
-// And the affected stickers on ADJACENT faces also need to cycle.
-//
-// This is getting complex. Let me implement this properly.
+// Sticker indices:
+//   0 = corner at vertex A    4 = corner at vertex B    8 = corner at vertex C
+//   1 = edge on AB            3 = edge on AC            6 = edge on BC
+//   2 = center (near A)       5 = center (near B)       7 = center (near C)
 
-// State: 8 faces × 9 stickers = 72 sticker values
-// stickers[face][position] = color index (0-7)
+// ============================================================
+// FTO State
+// ============================================================
 var stickers = [];
 var moveCount = 0;
 
@@ -425,269 +194,66 @@ function updateMoveCounter() {
 // ============================================================
 // FTO Turn Logic
 // ============================================================
-// For each of the 8 faces, we need:
-// 1. The on-face permutation (3 cycles of 3)
-// 2. The adjacent sticker cycles (pieces shared with neighboring faces)
-//
-// The octahedron faces and their vertex assignments:
-//   Face 0 (TFR): verts = [Top, Front, Right]
-//   Face 1 (TRB): verts = [Top, Right, Back]
-//   Face 2 (TBL): verts = [Top, Back, Left]
-//   Face 3 (TLF): verts = [Top, Left, Front]
-//   Face 4 (BRF): verts = [Bottom, Right, Front]
-//   Face 5 (BBR): verts = [Bottom, Back, Right]
-//   Face 6 (BLB): verts = [Bottom, Left, Back]
-//   Face 7 (BFL): verts = [Bottom, Front, Left]
-//
-// Adjacency: Each face shares an edge with 3 other faces.
-// For face F with vertices [A, B, C]:
-//   Edge AB is shared with face that also has vertices A and B
-//   Edge BC is shared with face that also has vertices B and C
-//   Edge AC is shared with face that also has vertices A and C
-//
-// Sticker positions on a face:
-//   0 = corner at vertex A (up-pointing triangle at top)
-//   1 = edge along AB (up-pointing triangle on left)
-//   2 = center (down-pointing triangle, left of middle)
-//   3 = edge along AC (up-pointing triangle on right)
-//   4 = corner at vertex B (up-pointing triangle at bottom-left)
-//   5 = center (down-pointing triangle, bottom-left)
-//   6 = edge along BC (up-pointing triangle at bottom-middle)
-//   7 = center (down-pointing triangle, bottom-right)
-//   8 = corner at vertex C (up-pointing triangle at bottom-right)
+// CW 120° on-face permutation (viewed from outside):
+// Corners: A->C->B->A, i.e. positions (0, 8, 4)
+// Edges: AB->BC->CA, i.e. positions (1, 6, 3)
+// Centers: positions (2, 7, 5)
+var ON_FACE_CW = [[0,4,8],[1,6,3],[2,7,5]];
 
-// For each face, find its 3 adjacent faces and which stickers are affected
-// when this face turns CW by 120°.
+// Faces around each vertex (in CW order when viewed from the vertex outward)
+var vertexFaces = [
+  [0, 1, 2, 3],   // vertex 0 (Top)
+  [0, 3, 7, 4],   // vertex 1 (Front)
+  [0, 4, 5, 1],   // vertex 2 (Right)
+  [1, 5, 6, 2],   // vertex 3 (Back)
+  [2, 6, 7, 3],   // vertex 4 (Left)
+  [4, 7, 6, 5],   // vertex 5 (Bottom)
+];
 
-// Helper: find face index that contains both vertex v1 and v2 (other than face fi)
-function findAdjacentFace(fi, v1, v2) {
-  for (var i = 0; i < 8; i++) {
-    if (i === fi) continue;
-    var fv = FACES[i].verts;
-    var has1 = false, has2 = false;
-    for (var j = 0; j < 3; j++) {
-      if (fv[j][0]===v1[0] && fv[j][1]===v1[1] && fv[j][2]===v1[2]) has1 = true;
-      if (fv[j][0]===v2[0] && fv[j][1]===v2[1] && fv[j][2]===v2[2]) has2 = true;
-    }
-    if (has1 && has2) return i;
-  }
-  return -1;
-}
-
-// Helper: given a face and a vertex, which sticker index is the corner at that vertex?
-function cornerIndexForVertex(fi, v) {
-  var fv = FACES[fi].verts;
+// Returns the sticker index of the corner at the given vertex on the given face
+function cornerStickerIndexOnFace(face, vertexIdx) {
+  var fv = FACE_VERTS[face];
   for (var j = 0; j < 3; j++) {
-    if (fv[j][0]===v[0] && fv[j][1]===v[1] && fv[j][2]===v[2]) {
-      return j * 4; // vertex 0 -> sticker 0, vertex 1 -> sticker 4, vertex 2 -> sticker 8
-    }
+    if (fv[j] === vertexIdx) return j * 4;
   }
   return -1;
 }
 
-// Helper: given a face and two vertices (defining a shared edge), return the 
-// sticker indices on that face along that edge.
-// Edge between vertex i and vertex j of the face:
-//   Edge (v0,v1) = AB: stickers [0, 1, 2, 4] -> no wait, [1, 2, 4] minus corners
-//   
-// Let me define which stickers are on which edge more carefully.
-// For face with vertices at positions 0,1,2 of the verts array:
-//   Edge v0-v1 (top to bottom-left): stickers 1 (edge), 2 (center)
-//   Edge v1-v2 (bottom-left to bottom-right): stickers 5 (center), 6 (edge), 7 (center)
-//   Wait that's 3 stickers... 
-//   Edge v0-v2 (top to bottom-right): stickers 3 (edge), ... 
-//
-// Hmm. When face F turns, which stickers on adjacent faces move?
-// A 120° CW turn of face F affects:
-// - All 9 stickers on face F itself (permuted)
-// - Stickers on adjacent faces that are "attached" to the turning layer
-//
-// In an FTO, when a face turns, it moves:
-// - The 3 corner pieces at the face's vertices
-// - The 3 edge pieces at the face's edges
-// - The 3 center pieces on the face
-//
-// A corner piece sits at a vertex and has stickers on all 4 faces meeting at that vertex.
-// An edge piece sits on an edge of the octahedron and has stickers on the 2 faces sharing that edge.
-// A center piece has a sticker only on this face.
-//
-// So when face F turns:
-// ON face F: all 9 stickers permute as: (0,8,4)(3,6,1)(2,7,5) for CW
-// ON adjacent faces:
-//   - Corner pieces: each vertex of F is shared by 4 faces. The corner piece's stickers
-//     on the other 3 faces (not F) rotate with the turn.
-//   - Edge pieces: each edge of F is shared with 1 other face. The edge piece's sticker
-//     on that other face moves to a different adjacent face's edge sticker position.
-//
-// This is the key complexity. Let me work out the adjacency carefully.
-//
-// For the FTO, when face F (with vertices A, B, C) turns CW by 120°:
-//   Vertex A -> position of C
-//   Vertex B -> position of A  
-//   Vertex C -> position of B
-//   Wait, I said CW maps: 0->8->4->0, meaning A->C->B->A, so:
-//   The piece at A moves to where C was, piece at C moves to B, piece at B moves to A.
-//
-// Corner at vertex A: has stickers on F and on the 3 other faces at vertex A.
-// After CW turn, this corner moves to vertex C position.
-// The stickers on non-F faces need to move to the corresponding positions at vertex C.
-//
-// Let me define all adjacency data explicitly.
-
-// I'll precompute the turn data for each face.
-// Each face turn affects: 
-// 1. On-face: (0,8,4)(1,6,3)(2,7,5) for CW (or reverse for CCW)
-// 2. Off-face: need to figure out 3 "rings" of stickers on adjacent faces
-
-// Let me take a different approach and define the full state permutation for each face turn.
-// I'll identify each sticker globally as (face, index) and compute where it goes.
-
-// For clarity, let me number each vertex:
-// Top=0, Front=1, Right=2, Back=3, Left=4, Bottom=5
-var VERT = [
-  vec3( 0,  1,  0),  // 0 Top
-  vec3( 0,  0,  1),  // 1 Front
-  vec3( 1,  0,  0),  // 2 Right
-  vec3( 0,  0, -1),  // 3 Back
-  vec3(-1,  0,  0),  // 4 Left
-  vec3( 0, -1,  0),  // 5 Bottom
-];
-
-// Redefine faces using vertex indices:
-var FACE_VERTS = [
-  [0, 1, 2],  // 0 TFR
-  [0, 2, 3],  // 1 TRB
-  [0, 3, 4],  // 2 TBL
-  [0, 4, 1],  // 3 TLF
-  [5, 2, 1],  // 4 BRF
-  [5, 3, 2],  // 5 BBR
-  [5, 4, 3],  // 6 BLB
-  [5, 1, 4],  // 7 BFL
-];
-
-// For each face, sticker positions:
-// sticker 0 = corner at vertex A (FACE_VERTS[f][0])
-// sticker 1 = edge on edge AB
-// sticker 2 = center (down-triangle between AB and AC sides)
-// sticker 3 = edge on edge AC
-// sticker 4 = corner at vertex B (FACE_VERTS[f][1])
-// sticker 5 = center (down-triangle near B)
-// sticker 6 = edge on edge BC
-// sticker 7 = center (down-triangle near C)
-// sticker 8 = corner at vertex C (FACE_VERTS[f][2])
-
-// CW 120° on-face permutation: (0 8 4)(1 6 3)(2 7 5) -- maps A->C->B->A etc.
-// This means: sticker at position 0 goes to position where 4 was... 
-// Wait, let me be more careful. CW rotation looking from outside:
-// The piece at vertex A position moves to vertex C position.
-// So sticker[0] -> sticker[8] position? No:
-// The permutation should read: new[destination] = old[source]
-// If vertex A's piece moves to where C was, then new[8] = old[0].
-// If vertex C's piece moves to where B was, then new[4] = old[8].
-// If vertex B's piece moves to where A was, then new[0] = old[4].
-// So the cycle is: position 0 <- 4 <- 8 <- 0
-// Or equivalently: new[0]=old[4], new[4]=old[8], new[8]=old[0]
-//
-// For edges: edge AB -> edge CA? 
-// CW: A->C, B->A. So edge AB moves to edge CA position.
-// sticker 1 (edge AB) -> sticker 3 (edge AC? or CA?)
-// Hmm, edge AC in my numbering is sticker 3. But the piece that was at AB 
-// is now at CA. If CA = AC just reversed, it's still sticker 3 on this face.
-// So: new[3] = old[1]
-// Edge AC -> edge CB: edge going from A to C, after CW A->C, C->B, becomes C to B = CB = BC.
-// sticker 3 (edge AC) -> sticker 6 (edge BC)
-// So: new[6] = old[3]  
-// Edge BC -> edge BA = AB: B->A, C->B, so BC -> AB.
-// sticker 6 (edge BC) -> sticker 1 (edge AB)
-// So: new[1] = old[6]
-// Edge cycle: (1 6 3) -- new[1]=old[6], new[6]=old[3], new[3]=old[1] ✓
-//
-// Centers: down-pointing triangles
-// Center 2 is between AB and AC sides (near top)
-// Center 5 is near B 
-// Center 7 is near C
-// CW: near-top center -> near-C center -> near-B center -> near-top
-// new[7] = old[2], new[5] = old[7], new[2] = old[5]
-// Center cycle: (2 7 5) -- new[2]=old[5], new[5]=old[7], new[7]=old[2] ✓
-
-var ON_FACE_CW = [[0,4,8],[1,6,3],[2,7,5]]; // 3 cycles for CW turn
-
-// Now for off-face stickers. When face f turns CW:
-// 
-// Corner piece at vertex A of face f:
-//   This vertex is shared by (usually) 4 faces. 
-//   The corner piece has a sticker on each of these 4 faces.
-//   When face f turns, the corner stickers on the other 3 faces cycle.
-//
-// Actually, no. When face f turns, the corner piece at A MOVES to vertex C position.
-// That means all stickers of that corner piece move. The sticker on face f moves 
-// from position 0 to position 8 (handled by on-face permutation).
-// The stickers on the other 3 faces at vertex A need to move to the corresponding 
-// positions on the 3 faces at vertex C.
-//
-// This is getting very complex. Let me take a systematic approach.
-
-// For each vertex, list which (face, stickerIndex) pairs are the corner sticker at that vertex.
-function cornerStickersAtVertex(vi) {
-  var result = [];
-  for (var f = 0; f < 8; f++) {
-    for (var j = 0; j < 3; j++) {
-      if (FACE_VERTS[f][j] === vi) {
-        result.push([f, j * 4]); // vertex 0->sticker 0, vertex 1->sticker 4, vertex 2->sticker 8
-      }
-    }
+// Returns the edge sticker index for the edge between vertices v1 and v2 on a face
+function edgeStickerOnFace(face, v1, v2) {
+  var fv = FACE_VERTS[face];
+  var i1 = -1, i2 = -1;
+  for (var j = 0; j < 3; j++) {
+    if (fv[j] === v1) i1 = j;
+    if (fv[j] === v2) i2 = j;
   }
-  return result;
+  if ((i1===0&&i2===1)||(i1===1&&i2===0)) return 1;
+  if ((i1===1&&i2===2)||(i1===2&&i2===1)) return 6;
+  return 3; // (0,2) or (2,0)
 }
 
-// For each edge (pair of vertices), list which (face, stickerIndex) pairs are the edge sticker.
-function edgeStickersForEdge(vi1, vi2) {
-  var result = [];
-  for (var f = 0; f < 8; f++) {
-    var fv = FACE_VERTS[f];
-    // Check if this face contains both vertices
-    var idx1 = -1, idx2 = -1;
-    for (var j = 0; j < 3; j++) {
-      if (fv[j] === vi1) idx1 = j;
-      if (fv[j] === vi2) idx2 = j;
-    }
-    if (idx1 >= 0 && idx2 >= 0) {
-      // Edge sticker index: edge between vertex positions idx1 and idx2
-      // Edge between pos 0 and pos 1 -> sticker 1
-      // Edge between pos 1 and pos 2 -> sticker 6
-      // Edge between pos 0 and pos 2 -> sticker 3
-      var edgeIdx;
-      if ((idx1===0 && idx2===1) || (idx1===1 && idx2===0)) edgeIdx = 1;
-      else if ((idx1===1 && idx2===2) || (idx1===2 && idx2===1)) edgeIdx = 6;
-      else edgeIdx = 3; // (0,2) or (2,0)
-      result.push([f, edgeIdx]);
-    }
+// Returns the 3 faces around a vertex excluding the given face, in CW order
+function otherFacesAroundVertex(v, excludeFace) {
+  var vf = vertexFaces[v];
+  var startIdx = -1;
+  for (var j = 0; j < 4; j++) {
+    if (vf[j] === excludeFace) { startIdx = j; break; }
   }
-  return result;
+  return [
+    vf[(startIdx + 1) % 4],
+    vf[(startIdx + 2) % 4],
+    vf[(startIdx + 3) % 4]
+  ];
 }
 
-// Build turn permutation for each face
-// Returns array of [source, destination] pairs where source and dest are [face, sticker]
+// Build CW turn permutation cycles for a face.
+// Returns array of 3-element cycles, each cycle is [[face,sticker], [face,sticker], [face,sticker]].
+// Cycle (a, b, c) means: piece at a moves to b, b moves to c, c moves to a.
 function buildTurnCW(fi) {
   var fv = FACE_VERTS[fi];
   var A = fv[0], B = fv[1], C = fv[2];
-  
-  // CW turn maps: piece at A -> piece at C position, C -> B position, B -> A position
-  // On-face is handled by ON_FACE_CW cycles.
-  
-  // We need to figure out off-face cycles.
-  // 
-  // The 3 edges of this face:
-  //   Edge AB, Edge BC, Edge AC
-  // Each edge piece has 2 stickers - one on this face (handled on-face) and one on adjacent face.
-  // When this face turns CW:
-  //   Edge AB piece moves to Edge CA position
-  //   Edge CA piece moves to Edge BC position  
-  //   Edge BC piece moves to Edge AB position
-  //
-  // The adjacent face stickers cycle correspondingly.
-  
-  // Find adjacent faces:
+
+  // Find adjacent faces sharing each edge
   var fAB = -1, fBC = -1, fAC = -1;
   for (var i = 0; i < 8; i++) {
     if (i === fi) continue;
@@ -701,315 +267,41 @@ function buildTurnCW(fi) {
     if (has[1] && has[2]) fBC = i;
     if (has[0] && has[2]) fAC = i;
   }
-  
-  // Edge sticker on adjacent face for edge AB:
-  function edgeStickerOnFace(face, v1, v2) {
-    var fvv = FACE_VERTS[face];
-    var i1 = -1, i2 = -1;
-    for (var j = 0; j < 3; j++) {
-      if (fvv[j] === v1) i1 = j;
-      if (fvv[j] === v2) i2 = j;
-    }
-    if ((i1===0&&i2===1)||(i1===1&&i2===0)) return 1;
-    if ((i1===1&&i2===2)||(i1===2&&i2===1)) return 6;
-    return 3; // (0,2) or (2,0)
-  }
-  
-  // Center stickers adjacent to an edge on the adjacent face:
-  // On a face, the centers adjacent to each edge are:
-  //   Edge at sticker 1 (v0-v1): centers 2, 5
-  //   Wait, no. Let me reconsider center positions.
-  //   Center 2 is between edges AB and AC, near top. 
-  //   Center 5 is near vertex B (between edges AB and BC)
-  //   Center 7 is near vertex C (between edges AC and BC)
-  //
-  // Adjacent to edge v0-v1 (sticker 1): centers 2 and 5
-  //   center 2 is "above" the edge (closer to v0)
-  //   center 5 is "below" the edge (closer to v1)
-  //   Hmm, actually:
-  //   Edge sticker 1 sits between v0 and v1.
-  //   Center 2 sits between edge(v0-v1) and edge(v0-v2) -- so it's on the v0 side of edge v0-v1
-  //   Center 5 sits between edge(v0-v1) and edge(v1-v2) -- so it's on the v1 side of edge v0-v1
-  //
-  // So for each edge on the adjacent face, we need the 2 centers flanking that edge.
-  
-  function centersAdjacentToEdge(face, v1, v2) {
-    var fvv = FACE_VERTS[face];
-    var i1 = -1, i2 = -1;
-    for (var j = 0; j < 3; j++) {
-      if (fvv[j] === v1) i1 = j;
-      if (fvv[j] === v2) i2 = j;
-    }
-    // Centers:
-    // Center between edge(v0,v1) and edge(v0,v2) = center 2 (near v0)
-    // Center between edge(v0,v1) and edge(v1,v2) = center 5 (near v1)
-    // Center between edge(v0,v2) and edge(v1,v2) = center 7 (near v2)
-    //
-    // For edge between vertex positions a and b:
-    //   (0,1): centers are 2 (near v0) and 5 (near v1)
-    //   (0,2): centers are 2 (near v0) and 7 (near v2)
-    //   (1,2): centers are 5 (near v1) and 7 (near v2)
-    var a = Math.min(i1, i2), b = Math.max(i1, i2);
-    if (a===0 && b===1) return [2, 5];
-    if (a===0 && b===2) return [2, 7];
-    return [5, 7]; // (1,2)
-  }
-  
-  // Now build the off-face cycles:
-  // 
-  // Edge pieces cycle: AB -> CA -> BC -> AB  
-  // Edge sticker on fAB for edge AB -> edge sticker on fAC for edge AC -> edge sticker on fBC for edge BC
-  var eAB = edgeStickerOnFace(fAB, A, B);
-  var eAC = edgeStickerOnFace(fAC, A, C);
-  var eBC = edgeStickerOnFace(fBC, B, C);
-  
-  // Center pieces adjacent to the face also cycle.
-  // On the adjacent face fAB, the 2 centers flanking edge AB cycle with
-  // the 2 centers flanking edge CA on fAC, etc.
-  var cAB = centersAdjacentToEdge(fAB, A, B);
-  var cAC = centersAdjacentToEdge(fAC, A, C);
-  var cBC = centersAdjacentToEdge(fBC, B, C);
-  
-  // The direction matters. When the face turns CW:
-  // The piece at edge AB moves to edge CA position.
-  // On the adjacent face fAB, the center closer to A should map to the center on fAC closer to A.
-  // The center closer to B on fAB should map to the center on fAC closer to C.
-  // Wait - when edge AB moves to CA position:
-  //   The vertex A stays "connected" to A (since A is shared between edges AB and CA)
-  //   The vertex B end maps to vertex C end
-  //   Wait no - edge AB moves to where edge CA was. Edge CA has endpoints C and A.
-  //   The piece's A-side stays at A, and B-side goes to C? No, the whole piece moves.
-  //   
-  // Actually when face f turns CW:
-  //   Position A -> position C (piece at A goes to where C was)
-  //   Position B -> position A
-  //   Position C -> position B
-  //
-  //   Edge AB: one end at A, other at B. After turn: A->C, B->A. So edge is now at C-A = AC position.
-  //   The center adjacent to edge AB and near A goes to center adjacent to edge AC and near C.
-  //   The center adjacent to edge AB and near B goes to center adjacent to edge AC and near A.
-  //
-  //   Edge AC: A->C, C->B. Edge goes to C-B = BC position.
-  //   Edge BC: B->A, C->B. Edge goes to A-B = AB position.
-  
-  // For centers on adjacent faces:
-  // On fAB (adjacent via edge AB):
-  //   Center near A (cAB[?]) -> maps to fAC, center near C (after AB piece moves to AC position)
-  //   Center near B (cAB[?]) -> maps to fAC, center near A
-  //
-  // I need to know which of cAB[0], cAB[1] is near A vs near B on face fAB.
-  
-  function centerNearVertex(face, v1, v2, targetV) {
-    // Returns the center index on `face` that is adjacent to edge(v1,v2) and near vertex targetV
-    var fvv = FACE_VERTS[face];
-    var it = -1;
-    for (var j = 0; j < 3; j++) {
-      if (fvv[j] === targetV) it = j;
-    }
-    // Center near vertex position `it`:
-    // v0 -> center 2
-    // v1 -> center 5
-    // v2 -> center 7
-    return [2, 5, 7][it];
-  }
-  
-  // Build cycles:
+
   var cycles = [];
-  
-  // On-face cycles
+
+  // On-face cycles (all 9 stickers on this face)
   for (var ci = 0; ci < ON_FACE_CW.length; ci++) {
     var cyc = ON_FACE_CW[ci];
     cycles.push([[fi, cyc[0]], [fi, cyc[1]], [fi, cyc[2]]]);
   }
-  
-  // Edge piece off-face cycle:
-  // Edge AB -> AC -> BC -> AB (pieces move: AB piece goes to AC position, etc.)
-  // So: sticker on fAB at eAB -> sticker on fAC at eAC -> sticker on fBC at eBC -> back
+
+  // Off-face edge cycle: edge stickers on adjacent faces cycle
+  // When face turns CW: edge AB -> AC, AC -> BC, BC -> AB
+  var eAB = edgeStickerOnFace(fAB, A, B);
+  var eAC = edgeStickerOnFace(fAC, A, C);
+  var eBC = edgeStickerOnFace(fBC, B, C);
   cycles.push([[fAB, eAB], [fAC, eAC], [fBC, eBC]]);
-  
-  // Center off-face cycles:
-  // For edge AB moving to AC position:
-  //   On fAB, center near A -> on fAC, center near C  (since A in AB maps to C in AC... wait)
-  //   Actually: AB piece moves to where CA piece was (= AC position).
-  //   In the AB piece: the A-side -> C-side (since A->C in the turn)
-  //                     the B-side -> A-side (since B->A in the turn)
-  //   
-  //   So the sticker that was near A on fAB goes to where the sticker near C on fAC was.
-  //   And the sticker near B on fAB goes to where the sticker near A on fAC was.
-  //
-  // Wait, but the centers near edge AB on fAB are part of the turning face's layer? 
-  // Actually no - centers on fAB adjacent to edge AB are NOT on face fi. They are on 
-  // the adjacent face. And when face fi turns, these centers DO move because they are 
-  // center pieces that are in the turning layer.
-  //
-  // Hmm wait - in an FTO, center pieces have only 1 sticker and they're only on one face.
-  // When face fi turns, only the 3 center pieces ON face fi move. Center pieces on 
-  // adjacent faces do NOT move.
-  //
-  // Let me reconsider what moves when a face turns:
-  // - The 3 corners at the face's vertices: these are shared between 4 faces each
-  // - The 3 edges at the face's edges: shared between 2 faces each
-  // - The 3 centers on the face: only on this face
-  //
-  // So off-face, only corner and edge stickers move, NOT center stickers.
-  // Let me remove the center off-face cycles.
-  
-  // Correction: remove center cycles from off-face, keep only edge and corner off-face.
-  cycles = []; // restart
-  
-  // On-face cycles (all 9 stickers)
-  for (var ci2 = 0; ci2 < ON_FACE_CW.length; ci2++) {
-    var cyc2 = ON_FACE_CW[ci2];
-    cycles.push([[fi, cyc2[0]], [fi, cyc2[1]], [fi, cyc2[2]]]);
-  }
-  
-  // Edge pieces off-face: 1 cycle of 3
-  cycles.push([[fAB, eAB], [fAC, eAC], [fBC, eBC]]);
-  
-  // Corner pieces off-face: each corner has 4 stickers, one on fi (handled on-face),
-  // and 3 on other faces. The 3 off-face stickers need to cycle to the new vertex position.
-  //
-  // Corner at vertex A: 
-  //   Faces at vertex A (other than fi): let's call them fA1, fA2, fA3
-  //   Corner at vertex C:
-  //   Faces at vertex C (other than fi): fC1, fC2, fC3
-  //   Corner at vertex B:
-  //   Faces at vertex B (other than fi): fB1, fB2, fB3
-  //
-  // When face fi turns CW: A->C, C->B, B->A
-  // The corner piece at A (with stickers on fi, fA1, fA2, fA3) moves to vertex C.
-  // The 3 off-face stickers need to go to the appropriate positions at vertex C.
-  //
-  // The key question: which sticker on fA1 goes to which position on fC1?
-  // This depends on the specific faces involved.
-  //
-  // Let me enumerate for each vertex, the faces that contain it (in order around the vertex).
-  
-  // Faces around each vertex (ordered):
-  // Vertex 0 (Top): faces 0,1,2,3 (TFR, TRB, TBL, TLF) - going CW looking from above
-  // Vertex 1 (Front): faces 0,3,7,4 (TFR, TLF, BFL, BRF)
-  // Vertex 2 (Right): faces 0,4,5,1 (TFR, BRF, BBR, TRB) 
-  // Vertex 3 (Back): faces 1,5,6,2 (TRB, BBR, BLB, TBL)
-  // Vertex 4 (Left): faces 2,6,7,3 (TBL, BLB, BFL, TLF)
-  // Vertex 5 (Bottom): faces 4,7,6,5 (BRF, BFL, BLB, BBR)
-  
-  var vertexFaces = [
-    [0, 1, 2, 3],   // vertex 0 (Top)
-    [0, 3, 7, 4],   // vertex 1 (Front)
-    [0, 4, 5, 1],   // vertex 2 (Right)
-    [1, 5, 6, 2],   // vertex 3 (Back)
-    [2, 6, 7, 3],   // vertex 4 (Left)
-    [4, 7, 6, 5],   // vertex 5 (Bottom)
-  ];
-  
-  // For the corner piece at vertex V, when face fi turns CW and V moves to position W:
-  // The corner piece's stickers on faces around V (excluding fi) need to move to 
-  // corresponding positions on faces around W (excluding fi).
-  //
-  // The ordering around a vertex determines which face maps to which.
-  // Around vertex V, the faces are ordered. Face fi is one of them.
-  // The other 3 faces (in order, starting after fi going CW) are fV1, fV2, fV3.
-  // Similarly around vertex W, the other 3 faces (in order, starting after fi going CW) are fW1, fW2, fW3.
-  // The mapping is: fV1->fW1, fV2->fW2, fV3->fW3.
-  //
-  // But I need to be careful about the ordering direction. Let me just verify with a specific case.
-  
-  // Actually, the ordering I listed above might not be consistently CW or CCW. Let me verify by
-  // checking the geometric arrangement.
-  //
-  // For vertex 0 (Top), looking down:
-  //   Front is at (0,0,1), Right at (1,0,0), Back at (0,0,-1), Left at (-1,0,0)
-  //   Face TFR has verts Top,Front,Right - this face is in the +z,+x quadrant
-  //   Face TRB has verts Top,Right,Back - in the +x,-z quadrant
-  //   Face TBL has verts Top,Back,Left - in the -z,-x quadrant
-  //   Face TLF has verts Top,Left,Front - in the -x,+z quadrant
-  //   Going CW looking from above (looking down -y axis):
-  //   TFR -> TRB -> TBL -> TLF -> back to TFR ✓ (this is CW from above)
-  
-  // For vertex 2 (Right), looking from the right (+x direction, looking -x):
-  //   Adjacent faces: TFR(0), BRF(4), BBR(5), TRB(1)
-  //   TFR is top-front, BRF is bottom-front, BBR is bottom-back, TRB is top-back
-  //   CW from right looking left: TFR(front-top) -> TRB(back-top) -> BBR(back-bottom) -> BRF(front-bottom)
-  //   Hmm, that would be: [0, 1, 5, 4]. But I listed [0, 4, 5, 1].
-  //   Let me check: looking from +x toward origin:
-  //     TFR is at (+z, +y) quadrant: front=+z, top=+y -> top-right of view ✓
-  //     BRF is at (+z, -y) quadrant: front=+z, bottom=-y -> bottom-right of view
-  //     BBR is at (-z, -y) quadrant -> bottom-left
-  //     TRB is at (-z, +y) quadrant -> top-left
-  //   CW from this view: TFR(top-right) -> BRF(bottom-right) -> BBR(bottom-left) -> TRB(top-left)
-  //   That is: [0, 4, 5, 1] ✓ matches my listing.
-  //   Wait but CW goes: top-right -> bottom-right -> bottom-left -> top-left? That's actually CW. ✓
-  
-  // Now, when face fi turns CW, and vertex A moves to C:
-  // I need to figure out the correspondence between the non-fi faces around A and around C.
-  
-  // Let me get the 3 other faces around a vertex (excluding face fi), in CW order starting from the face after fi.
-  function otherFacesAroundVertex(v, excludeFace) {
-    var vf = vertexFaces[v];
-    var startIdx = -1;
-    for (var j = 0; j < 4; j++) {
-      if (vf[j] === excludeFace) { startIdx = j; break; }
-    }
-    // Return the 3 faces after fi in CW order
-    return [
-      vf[(startIdx + 1) % 4],
-      vf[(startIdx + 2) % 4],
-      vf[(startIdx + 3) % 4]
-    ];
-  }
-  
-  // When A moves to C position (CW turn):
-  //   The 3 off-face stickers of corner A go to the 3 off-face positions of corner C.
-  //   
-  //   The face after fi going CW around A should map to the face after fi going CW around C.
-  //   But wait - when the piece physically rotates 120° around the face normal, the stickers
-  //   need to end up in the right places.
-  //
-  //   Let me think about it differently. 
-  //   Around vertex A, exclude fi, get faces [fA1, fA2, fA3] in order.
-  //   Around vertex C, exclude fi, get faces [fC1, fC2, fC3] in order.
-  //   
-  //   The corner piece at A has stickers on fi, fA1, fA2, fA3.
-  //   After the turn, this piece is now at vertex C, so its stickers should be on fi, fC1, fC2, fC3.
-  //   The question is: which maps to which?
-  //   
-  //   The face that was "next to fi in CW direction" around A should map to
-  //   "next to fi in CW direction" around C.
-  //   So: fA1 -> fC1, fA2 -> fC2, fA3 -> fC3.
-  
+
+  // Off-face corner cycles: corner stickers on non-turning faces cycle
+  // When CW: corner A -> C, C -> B, B -> A
+  // For each of the 3 non-fi faces around each vertex, corresponding faces map to each other
   var facesA = otherFacesAroundVertex(A, fi);
   var facesC = otherFacesAroundVertex(C, fi);
   var facesB = otherFacesAroundVertex(B, fi);
-  
-  // A -> C: stickers on facesA[i] move to facesC[i]
-  // C -> B: stickers on facesC[i] move to facesB[i]
-  // B -> A: stickers on facesB[i] move to facesA[i]
-  // This gives 3 cycles of 3 (one for each i).
-  
+
   for (var k = 0; k < 3; k++) {
     var sA = cornerStickerIndexOnFace(facesA[k], A);
     var sC = cornerStickerIndexOnFace(facesC[k], C);
     var sB = cornerStickerIndexOnFace(facesB[k], B);
     cycles.push([[facesA[k], sA], [facesC[k], sC], [facesB[k], sB]]);
   }
-  
+
   return cycles;
 }
 
-function cornerStickerIndexOnFace(face, vertexIdx) {
-  var fv = FACE_VERTS[face];
-  for (var j = 0; j < 3; j++) {
-    if (fv[j] === vertexIdx) return j * 4;
-  }
-  return -1;
-}
-
-// Apply a CW turn to the state
+// Apply CW turn: cycle (a, b, c) means a->b, b->c, c->a
 function applyCW(cycles) {
-  // Each cycle [a, b, c]: a->b->c->a  means new[b]=old[a], new[c]=old[b], new[a]=old[c]
-  // Wait, I need to be consistent. Let me define:
-  // Cycle (a, b, c) means: piece at a moves to b, piece at b moves to c, piece at c moves to a.
-  // So: new[b] = old[a], new[c] = old[b], new[a] = old[c]
   for (var i = 0; i < cycles.length; i++) {
     var cyc = cycles[i];
     var a = cyc[0], b = cyc[1], c = cyc[2];
@@ -1020,8 +312,8 @@ function applyCW(cycles) {
   }
 }
 
+// Apply CCW turn (reverse of CW)
 function applyCCW(cycles) {
-  // Reverse of CW: piece at a moves to c, etc.
   for (var i = 0; i < cycles.length; i++) {
     var cyc = cycles[i];
     var a = cyc[0], b = cyc[1], c = cyc[2];
@@ -1050,7 +342,6 @@ function turnFaceCCW(fi) {
   updateMoveCounter();
 }
 
-// Scramble
 function scramble(moves) {
   moves = moves || 30;
   for (var i = 0; i < moves; i++) {
@@ -1071,11 +362,10 @@ function scramble(moves) {
 var canvas, gl;
 var projMatrix, viewMatrix;
 var shaderProgram;
-var meshBuffers = []; // one per renderable triangle
 
 // Camera
 var camTheta = 0.6;  // horizontal angle
-var camPhi = 0.4;    // vertical angle  
+var camPhi = 0.4;    // vertical angle
 var camDist = 4.5;
 
 function getCameraPos() {
@@ -1086,7 +376,6 @@ function getCameraPos() {
   ];
 }
 
-// Vertex shader
 var VS_SRC = [
   "attribute vec3 aPosition;",
   "attribute vec3 aNormal;",
@@ -1104,7 +393,6 @@ var VS_SRC = [
   "}"
 ].join("\n");
 
-// Fragment shader
 var FS_SRC = [
   "precision mediump float;",
   "varying vec3 vColor;",
@@ -1126,30 +414,29 @@ function initGL() {
   canvas.style.top = "0";
   canvas.style.left = "0";
   document.body.appendChild(canvas);
-  
+
   gl = canvas.getContext("webgl", { antialias: true, alpha: false });
   if (!gl) { alert("WebGL not supported"); return; }
-  
+
   gl.clearColor(0.96, 0.96, 0.96, 1);
   gl.enable(gl.DEPTH_TEST);
   gl.enable(gl.CULL_FACE);
   gl.cullFace(gl.BACK);
-  
-  // Compile shaders
+
   var vs = gl.createShader(gl.VERTEX_SHADER);
   gl.shaderSource(vs, VS_SRC);
   gl.compileShader(vs);
-  
+
   var fs = gl.createShader(gl.FRAGMENT_SHADER);
   gl.shaderSource(fs, FS_SRC);
   gl.compileShader(fs);
-  
+
   shaderProgram = gl.createProgram();
   gl.attachShader(shaderProgram, vs);
   gl.attachShader(shaderProgram, fs);
   gl.linkProgram(shaderProgram);
   gl.useProgram(shaderProgram);
-  
+
   resize();
   window.addEventListener("resize", resize);
 }
@@ -1162,124 +449,59 @@ function resize() {
 }
 
 // ============================================================
-// Build 3D Geometry for the FTO
+// 3D Geometry for the FTO
 // ============================================================
-// Each face of the octahedron is subdivided into 9 small triangles.
-// We need to compute the 3D position of each small triangle.
-
-// For a face with vertices P0, P1, P2 (in 3D), we subdivide the triangle 
-// into a grid of 3 rows.
-// Using barycentric coordinates, the vertices of the subdivision grid are:
-//   (i, j, k) where i+j+k = 3 and i,j,k >= 0
-//   The 3D position is: (i*P0 + j*P1 + k*P2) / 3
+// Each face is subdivided into 9 small triangles using barycentric coordinates.
+// Grid points: (i,j,k) with i+j+k=3, position = (i*P0 + j*P1 + k*P2) / 3
 
 function subdivPoint(p0, p1, p2, i, j, k) {
   return vec3scale(vec3add(vec3add(vec3scale(p0, i), vec3scale(p1, j)), vec3scale(p2, k)), 1/3);
 }
 
-// The 9 small triangles in order [0..8]:
-// Up-pointing triangles (same orientation as big triangle):
-//   0: (3,0,0),(2,1,0),(2,0,1)  -- top vertex, center of edges
-//   Hmm, let me use a systematic approach.
-//
-// Grid points: (i,j,k) with i+j+k=3
-//   Row 0 (i=3): (3,0,0) = P0
-//   Row 1 (i=2): (2,1,0), (2,0,1)
-//   Row 2 (i=1): (1,2,0), (1,1,1), (1,0,2)
-//   Row 3 (i=0): (0,3,0)=P1, (0,2,1), (0,1,2), (0,0,3)=P2
-//
-// Small triangles (9 total):
-// Up-pointing (4):
-//   T0: (3,0,0), (2,1,0), (2,0,1)
-//   T1: (2,1,0), (1,2,0), (1,1,1)
-//   T2: (2,0,1), (1,1,1), (1,0,2)
-//   T3: (1,2,0), (0,3,0), (0,2,1)
-//   T4: (1,1,1), (0,2,1), (0,1,2)
-//   T5: (1,0,2), (0,1,2), (0,0,3)
-// Down-pointing (3):
-//   T6: (2,1,0), (2,0,1), (1,1,1)
-//   T7: (1,2,0), (1,1,1), (0,2,1)
-//   T8: (1,1,1), (1,0,2), (0,1,2)
-//
-// Wait, that's 6 up + 3 down = 9. ✓
-//
-// Now map these to our sticker indices:
-//   Sticker 0 (corner at v0): T0
-//   Sticker 1 (edge v0-v1):   T1
-//   Sticker 2 (center):       T6 (down-pointing, between v0 side edges)
-//   Sticker 3 (edge v0-v2):   T2
-//   Sticker 4 (corner at v1): T3
-//   Sticker 5 (center):       T7 (down-pointing, near v1)
-//   Sticker 6 (edge v1-v2):   T4
-//   Sticker 7 (center):       T8 (down-pointing, near v2)
-//   Sticker 8 (corner at v2): T5
-//
-// Let me verify:
-//   T0 = top triangle = corner at v0 ✓ (sticker 0)
-//   T1 = left side, between v0 and v1 = edge v0-v1 ✓ (sticker 1)
-//   T2 = right side, between v0 and v2 = edge v0-v2 ✓ (sticker 3)
-//   T3 = bottom-left = corner at v1 ✓ (sticker 4)
-//   T4 = bottom-middle = edge v1-v2 ✓ (sticker 6)
-//   T5 = bottom-right = corner at v2 ✓ (sticker 8)
-//   T6 = down-pointing center near top = center ✓ (sticker 2)
-//   T7 = down-pointing center near v1 = center ✓ (sticker 5)
-//   T8 = down-pointing center near v2 = center ✓ (sticker 7)
-
+// 9 subdivision triangles mapped to sticker indices
 var SUBDIV_TRIS = [
-  // [stickerIndex, baryA, baryB, baryC] for each vertex of the small triangle
-  // sticker 0: corner v0
-  { idx: 0, verts: [[3,0,0],[2,1,0],[2,0,1]] },
-  // sticker 1: edge v0-v1
-  { idx: 1, verts: [[2,1,0],[1,2,0],[1,1,1]] },
-  // sticker 2: center (down-pointing)
-  { idx: 2, verts: [[2,1,0],[2,0,1],[1,1,1]] },
-  // sticker 3: edge v0-v2
-  { idx: 3, verts: [[2,0,1],[1,1,1],[1,0,2]] },
-  // sticker 4: corner v1
-  { idx: 4, verts: [[1,2,0],[0,3,0],[0,2,1]] },
-  // sticker 5: center (down-pointing)
-  { idx: 5, verts: [[1,2,0],[1,1,1],[0,2,1]] },
-  // sticker 6: edge v1-v2
-  { idx: 6, verts: [[1,1,1],[0,2,1],[0,1,2]] },
-  // sticker 7: center (down-pointing)
-  { idx: 7, verts: [[1,1,1],[1,0,2],[0,1,2]] },
-  // sticker 8: corner v2
-  { idx: 8, verts: [[1,0,2],[0,1,2],[0,0,3]] },
+  { idx: 0, verts: [[3,0,0],[2,1,0],[2,0,1]] }, // corner A
+  { idx: 1, verts: [[2,1,0],[1,2,0],[1,1,1]] }, // edge AB
+  { idx: 2, verts: [[2,1,0],[2,0,1],[1,1,1]] }, // center (near A)
+  { idx: 3, verts: [[2,0,1],[1,1,1],[1,0,2]] }, // edge AC
+  { idx: 4, verts: [[1,2,0],[0,3,0],[0,2,1]] }, // corner B
+  { idx: 5, verts: [[1,2,0],[1,1,1],[0,2,1]] }, // center (near B)
+  { idx: 6, verts: [[1,1,1],[0,2,1],[0,1,2]] }, // edge BC
+  { idx: 7, verts: [[1,1,1],[1,0,2],[0,1,2]] }, // center (near C)
+  { idx: 8, verts: [[1,0,2],[0,1,2],[0,0,3]] }, // corner C
 ];
 
-// Scale factor: push sticker slightly outward from octahedron surface for visibility
-var STICKER_SCALE = 0.97;
-var GAP = 0.008; // gap between stickers
+var STICKER_SCALE = 0.97; // shrink factor for gap between stickers
+var GAP = 0.008;          // outward offset from octahedron surface
 
 function buildFaceGeometry(fi) {
   var fv = FACE_VERTS[fi];
   var P0 = VERT[fv[0]], P1 = VERT[fv[1]], P2 = VERT[fv[2]];
   var normal = FACES[fi].normal;
-  
+
   var tris = [];
   for (var si = 0; si < 9; si++) {
     var sd = SUBDIV_TRIS[si];
     var v0 = subdivPoint(P0, P1, P2, sd.verts[0][0], sd.verts[0][1], sd.verts[0][2]);
     var v1 = subdivPoint(P0, P1, P2, sd.verts[1][0], sd.verts[1][1], sd.verts[1][2]);
     var v2 = subdivPoint(P0, P1, P2, sd.verts[2][0], sd.verts[2][1], sd.verts[2][2]);
-    
+
     // Shrink toward center for gap effect
     var center = vec3scale(vec3add(vec3add(v0, v1), v2), 1/3);
     v0 = vec3lerp(center, v0, STICKER_SCALE);
     v1 = vec3lerp(center, v1, STICKER_SCALE);
     v2 = vec3lerp(center, v2, STICKER_SCALE);
-    
+
     // Push slightly outward
     v0 = vec3add(v0, vec3scale(normal, GAP));
     v1 = vec3add(v1, vec3scale(normal, GAP));
     v2 = vec3add(v2, vec3scale(normal, GAP));
-    
+
     tris.push({ face: fi, sticker: sd.idx, verts: [v0, v1, v2], normal: normal });
   }
   return tris;
 }
 
-// Also build the octahedron "body" (dark triangles underneath stickers)
 function buildBodyGeometry() {
   var tris = [];
   for (var fi = 0; fi < 8; fi++) {
@@ -1307,30 +529,27 @@ function buildAllGeometry() {
 
 function render() {
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-  
+
   var eye = getCameraPos();
   viewMatrix = mat4lookAt(eye, [0,0,0], [0,1,0]);
-  
+
   var uProj = gl.getUniformLocation(shaderProgram, "uProj");
   var uView = gl.getUniformLocation(shaderProgram, "uView");
   var uLight = gl.getUniformLocation(shaderProgram, "uLightDir");
-  
+
   gl.uniformMatrix4fv(uProj, false, projMatrix);
   gl.uniformMatrix4fv(uView, false, viewMatrix);
   gl.uniform3fv(uLight, vec3norm([0.5, 1.0, 0.8]));
-  
+
   var aPos = gl.getAttribLocation(shaderProgram, "aPosition");
   var aNorm = gl.getAttribLocation(shaderProgram, "aNormal");
   var aCol = gl.getAttribLocation(shaderProgram, "aColor");
-  
+
   gl.enableVertexAttribArray(aPos);
   gl.enableVertexAttribArray(aNorm);
   gl.enableVertexAttribArray(aCol);
-  
-  // Draw body
+
   drawTriangles(bodyTris, null, aPos, aNorm, aCol);
-  
-  // Draw stickers with animation
   drawTriangles(allStickerTris, stickers, aPos, aNorm, aCol);
 }
 
@@ -1338,7 +557,7 @@ function drawTriangles(tris, stickerState, aPos, aNorm, aCol) {
   var positions = [];
   var normals = [];
   var colors = [];
-  
+
   for (var i = 0; i < tris.length; i++) {
     var t = tris[i];
     var col;
@@ -1348,10 +567,10 @@ function drawTriangles(tris, stickerState, aPos, aNorm, aCol) {
     } else {
       col = t.color;
     }
-    
+
     var v = t.verts;
     var n = t.normal;
-    
+
     // Apply animation rotation if this sticker is part of the animating face
     if (animating && stickerState) {
       var shouldAnimate = false;
@@ -1360,7 +579,7 @@ function drawTriangles(tris, stickerState, aPos, aNorm, aCol) {
       } else {
         // Check if this sticker is in any off-face cycle
         var cycles = TURN_DATA[animFace];
-        for (var ci = 3; ci < cycles.length; ci++) { // off-face cycles start at index 3
+        for (var ci = 3; ci < cycles.length; ci++) {
           for (var cj = 0; cj < 3; cj++) {
             if (cycles[ci][cj][0] === t.face && cycles[ci][cj][1] === t.sticker) {
               shouldAnimate = true;
@@ -1370,7 +589,7 @@ function drawTriangles(tris, stickerState, aPos, aNorm, aCol) {
           if (shouldAnimate) break;
         }
       }
-      
+
       if (shouldAnimate) {
         var axis = FACES[animFace].normal;
         var angle = animDir * TURN_ANGLE * animProgress;
@@ -1382,31 +601,31 @@ function drawTriangles(tris, stickerState, aPos, aNorm, aCol) {
         n = rotatePoint(n, axis, angle);
       }
     }
-    
+
     for (var j = 0; j < 3; j++) {
       positions.push(v[j][0], v[j][1], v[j][2]);
       normals.push(n[0], n[1], n[2]);
       colors.push(col[0], col[1], col[2]);
     }
   }
-  
+
   var posBuf = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.DYNAMIC_DRAW);
   gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 0, 0);
-  
+
   var normBuf = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, normBuf);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(normals), gl.DYNAMIC_DRAW);
   gl.vertexAttribPointer(aNorm, 3, gl.FLOAT, false, 0, 0);
-  
+
   var colBuf = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, colBuf);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(colors), gl.DYNAMIC_DRAW);
   gl.vertexAttribPointer(aCol, 3, gl.FLOAT, false, 0, 0);
-  
+
   gl.drawArrays(gl.TRIANGLES, 0, positions.length / 3);
-  
+
   gl.deleteBuffer(posBuf);
   gl.deleteBuffer(normBuf);
   gl.deleteBuffer(colBuf);
@@ -1435,16 +654,15 @@ function updateAnimation() {
   if (!animating) return;
   var elapsed = performance.now() - animStartTime;
   animProgress = Math.min(elapsed / ANIM_DURATION, 1);
-  
+
   // Ease in-out
-  animProgress = animProgress < 0.5 
-    ? 2 * animProgress * animProgress 
+  animProgress = animProgress < 0.5
+    ? 2 * animProgress * animProgress
     : 1 - Math.pow(-2 * animProgress + 2, 2) / 2;
-  
+
   if (elapsed >= ANIM_DURATION) {
     animating = false;
     animProgress = 0;
-    // Apply the actual turn to state
     if (animDir > 0) turnFaceCW(animFace);
     else turnFaceCCW(animFace);
   }
@@ -1497,31 +715,29 @@ function onPointerUp(e) {
   }
 }
 
+// Click/tap: ray-cast to find which face was clicked, then turn it
 function handleClick(screenX, screenY, isRight) {
-  // Ray-cast to find which face was clicked
   var ndcX = (screenX / canvas.width) * 2 - 1;
   var ndcY = 1 - (screenY / canvas.height) * 2;
-  
-  // Unproject
+
   var invProj = invertMat4(projMatrix);
   var invView = invertMat4(viewMatrix);
-  
+
   var clipNear = [ndcX, ndcY, -1];
   var clipFar = [ndcX, ndcY, 1];
-  
+
   var eyeNear = mat4transform(invProj, clipNear);
   var eyeFar = mat4transform(invProj, clipFar);
-  
+
   var worldNear = mat4transform(invView, eyeNear);
   var worldFar = mat4transform(invView, eyeFar);
-  
+
   var rayOrigin = worldNear;
   var rayDir = vec3norm(vec3sub(worldFar, worldNear));
-  
-  // Test intersection with each face
+
   var bestT = Infinity;
   var bestFace = -1;
-  
+
   for (var fi = 0; fi < 8; fi++) {
     var fv = FACE_VERTS[fi];
     var P0 = VERT[fv[0]], P1 = VERT[fv[1]], P2 = VERT[fv[2]];
@@ -1531,7 +747,7 @@ function handleClick(screenX, screenY, isRight) {
       bestFace = fi;
     }
   }
-  
+
   if (bestFace >= 0) {
     animateTurn(bestFace, isRight ? -1 : 1);
   }
@@ -1555,7 +771,7 @@ function rayTriangleIntersect(origin, dir, v0, v1, v2) {
   return t > 0.001 ? t : null;
 }
 
-// Simple 4x4 matrix inverse (general)
+// General 4x4 matrix inverse
 function invertMat4(m) {
   var inv = new Float32Array(16);
   inv[0]  =  m[5]*m[10]*m[15]-m[5]*m[11]*m[14]-m[9]*m[6]*m[15]+m[9]*m[7]*m[14]+m[13]*m[6]*m[11]-m[13]*m[7]*m[10];
@@ -1574,7 +790,7 @@ function invertMat4(m) {
   inv[7]  =  m[0]*m[6]*m[11]-m[0]*m[7]*m[10]-m[4]*m[2]*m[11]+m[4]*m[3]*m[10]+m[8]*m[2]*m[7]-m[8]*m[3]*m[6];
   inv[11] = -m[0]*m[5]*m[11]+m[0]*m[7]*m[9]+m[4]*m[1]*m[11]-m[4]*m[3]*m[9]-m[8]*m[1]*m[7]+m[8]*m[3]*m[5];
   inv[15] =  m[0]*m[5]*m[10]-m[0]*m[6]*m[9]-m[4]*m[1]*m[10]+m[4]*m[2]*m[9]+m[8]*m[1]*m[6]-m[8]*m[2]*m[5];
-  
+
   var det = m[0]*inv[0]+m[1]*inv[4]+m[2]*inv[8]+m[3]*inv[12];
   if (Math.abs(det) < 1e-10) return mat4();
   det = 1 / det;
@@ -1591,9 +807,7 @@ function mainLoop() {
   requestAnimationFrame(mainLoop);
 }
 
-// ============================================================
 // Scramble exposed for Android bridge
-// ============================================================
 window.ftoScramble = function() {
   if (animating) return;
   initState();
@@ -1607,8 +821,7 @@ function init() {
   initState();
   initGL();
   buildAllGeometry();
-  
-  // Input
+
   canvas.addEventListener("mousedown", onPointerDown);
   canvas.addEventListener("mousemove", onPointerMove);
   canvas.addEventListener("mouseup", onPointerUp);
@@ -1616,10 +829,10 @@ function init() {
   canvas.addEventListener("touchmove", onPointerMove, { passive: false });
   canvas.addEventListener("touchend", onPointerUp, { passive: false });
   canvas.addEventListener("contextmenu", function(e) { e.preventDefault(); });
-  
+
   // Start scrambled
   scramble(30);
-  
+
   mainLoop();
 }
 
