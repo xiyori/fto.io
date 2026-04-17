@@ -26,12 +26,12 @@ canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 // ============================================================
 var FTO_COLORS = [
   "#FFFFFF", // face 0 - White   (top-front)
-  "#00AA00", // face 1 - Green   (top-right)
-  "#0000FF", // face 2 - Blue    (top-back)
-  "#FFAA00", // face 3 - Orange  (top-left)
-  "#FF0000", // face 4 - Red     (bottom-front)
-  "#FFFF00", // face 5 - Yellow  (bottom-right)
-  "#880088", // face 6 - Purple  (bottom-back)
+  "#880088", // face 1 - Green   (top-right)
+  "#00AA00", // face 2 - Blue    (top-back)
+  "#FF0000", // face 3 - Orange  (top-left)
+  "#0000FF", // face 4 - Red     (bottom-front)
+  "#FFAA00", // face 5 - Yellow  (bottom-right)
+  "#FFFF00", // face 6 - Purple  (bottom-back)
   "#888888"  // face 7 - Grey    (bottom-left)
 ];
 
@@ -210,6 +210,19 @@ var vertexFaces = [
   [4, 7, 6, 5],   // vertex 5 (Bottom)
 ];
 
+// Returns the edge sticker index for the edge between vertices v1 and v2 on a face
+function layerStickersOnFace(face, v1, v2) {
+  var fv = FACE_VERTS[face];
+  var i1 = -1, i2 = -1;
+  for (var j = 0; j < 3; j++) {
+    if (fv[j] === v1) i1 = j;
+    if (fv[j] === v2) i2 = j;
+  }
+  if ((i1===0&&i2===1)||(i1===1&&i2===0)) return [4, 5, 1, 2, 0];
+  if ((i1===1&&i2===2)||(i1===2&&i2===1)) return [8, 7, 6, 5, 4];
+  return [0, 2, 3, 7, 8];
+}
+
 // Returns the sticker index of the corner at the given vertex on the given face
 function cornerStickerIndexOnFace(face, vertexIdx) {
   var fv = FACE_VERTS[face];
@@ -219,31 +232,14 @@ function cornerStickerIndexOnFace(face, vertexIdx) {
   return -1;
 }
 
-// Returns the edge sticker index for the edge between vertices v1 and v2 on a face
-function edgeStickerOnFace(face, v1, v2) {
-  var fv = FACE_VERTS[face];
-  var i1 = -1, i2 = -1;
-  for (var j = 0; j < 3; j++) {
-    if (fv[j] === v1) i1 = j;
-    if (fv[j] === v2) i2 = j;
-  }
-  if ((i1===0&&i2===1)||(i1===1&&i2===0)) return 1;
-  if ((i1===1&&i2===2)||(i1===2&&i2===1)) return 6;
-  return 3; // (0,2) or (2,0)
-}
-
-// Returns the 3 faces around a vertex excluding the given face, in CW order
-function otherFacesAroundVertex(v, excludeFace) {
+// Returns the face around a vertex opposite to the given face
+function oppositeFaceAroundVertex(v, face) {
   var vf = vertexFaces[v];
-  var startIdx = -1;
+  var faceIdx = -1;
   for (var j = 0; j < 4; j++) {
-    if (vf[j] === excludeFace) { startIdx = j; break; }
+    if (vf[j] === face) { faceIdx = j; break; }
   }
-  return [
-    vf[(startIdx + 1) % 4],
-    vf[(startIdx + 2) % 4],
-    vf[(startIdx + 3) % 4]
-  ];
+  return vf[(faceIdx + 2) % 4];
 }
 
 // Build CW turn permutation cycles for a face.
@@ -276,26 +272,26 @@ function buildTurnCW(fi) {
     cycles.push([[fi, cyc[0]], [fi, cyc[1]], [fi, cyc[2]]]);
   }
 
-  // Off-face edge cycle: edge stickers on adjacent faces cycle
+  // Off-face sticker cycle on adjacent face, 5 stickers in each layer
   // When face turns CW: edge AB -> AC, AC -> BC, BC -> AB
-  var eAB = edgeStickerOnFace(fAB, A, B);
-  var eAC = edgeStickerOnFace(fAC, A, C);
-  var eBC = edgeStickerOnFace(fBC, B, C);
-  cycles.push([[fAB, eAB], [fAC, eAC], [fBC, eBC]]);
+  var lAB = layerStickersOnFace(fAB, A, B);
+  var lAC = layerStickersOnFace(fAC, A, C);
+  var lBC = layerStickersOnFace(fBC, B, C);
 
-  // Off-face corner cycles: corner stickers on non-turning faces cycle
-  // When CW: corner A -> C, C -> B, B -> A
-  // For each of the 3 non-fi faces around each vertex, corresponding faces map to each other
-  var facesA = otherFacesAroundVertex(A, fi);
-  var facesC = otherFacesAroundVertex(C, fi);
-  var facesB = otherFacesAroundVertex(B, fi);
-
-  for (var k = 0; k < 3; k++) {
-    var sA = cornerStickerIndexOnFace(facesA[k], A);
-    var sC = cornerStickerIndexOnFace(facesC[k], C);
-    var sB = cornerStickerIndexOnFace(facesB[k], B);
-    cycles.push([[facesA[k], sA], [facesC[k], sC], [facesB[k], sB]]);
+  for (var k = 0; k < 5; k++) {
+    cycles.push([[fAB, lAB[k]], [fAC, lAC[k]], [fBC, lBC[k]]]);
   }
+
+  // Off-face corner cycles: corner stickers on opposite faces cycle
+  // When CW: corner A -> C, C -> B, B -> A
+  var faceA = oppositeFaceAroundVertex(A, fi);
+  var faceC = oppositeFaceAroundVertex(C, fi);
+  var faceB = oppositeFaceAroundVertex(B, fi);
+
+  var sA = cornerStickerIndexOnFace(faceA, A);
+  var sC = cornerStickerIndexOnFace(faceC, C);
+  var sB = cornerStickerIndexOnFace(faceB, B);
+  cycles.push([[faceA, sA], [faceC, sC], [faceB, sB]]);
 
   return cycles;
 }
@@ -462,12 +458,12 @@ function subdivPoint(p0, p1, p2, i, j, k) {
 var SUBDIV_TRIS = [
   { idx: 0, verts: [[3,0,0],[2,1,0],[2,0,1]] }, // corner A
   { idx: 1, verts: [[2,1,0],[1,2,0],[1,1,1]] }, // edge AB
-  { idx: 2, verts: [[2,1,0],[2,0,1],[1,1,1]] }, // center (near A)
+  { idx: 2, verts: [[2,1,0],[1,1,1],[2,0,1]] }, // center (near A)
   { idx: 3, verts: [[2,0,1],[1,1,1],[1,0,2]] }, // edge AC
   { idx: 4, verts: [[1,2,0],[0,3,0],[0,2,1]] }, // corner B
-  { idx: 5, verts: [[1,2,0],[1,1,1],[0,2,1]] }, // center (near B)
+  { idx: 5, verts: [[1,2,0],[0,2,1],[1,1,1]] }, // center (near B)
   { idx: 6, verts: [[1,1,1],[0,2,1],[0,1,2]] }, // edge BC
-  { idx: 7, verts: [[1,1,1],[1,0,2],[0,1,2]] }, // center (near C)
+  { idx: 7, verts: [[1,1,1],[0,1,2],[1,0,2]] }, // center (near C)
   { idx: 8, verts: [[1,0,2],[0,1,2],[0,0,3]] }, // corner C
 ];
 
