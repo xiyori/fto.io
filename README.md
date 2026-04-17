@@ -9,7 +9,7 @@
   <br>
 </h1>  
 
-<p align="center">A minimal implementation of FTO puzzle on Android (?)</p><br>
+<p align="center">A minimal implementation of FTO (Face-Turning Octahedron) puzzle on Android (?)</p><br>
 
 ## 🕹️ Features
 - [x] Fully offline gameplay.
