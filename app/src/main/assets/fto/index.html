@@ -13,6 +13,7 @@ canvas { display: block; width: 100%; height: 100%; touch-action: none; }
   font-family: 'Helvetica Neue', Arial, sans-serif; font-size: 20px;
   color: #333; background: rgba(255,255,255,0.8); padding: 4px 16px;
   border-radius: 16px; pointer-events: none; user-select: none;
+  z-index: 1;
 }
 </style>
 </head>
@@ -326,22 +327,54 @@ for (var fi = 0; fi < 8; fi++) {
   TURN_DATA[fi] = buildTurnCW(fi);
 }
 
+var lastTurn = { face: -1, cw: false };
+
 function turnFaceCW(fi) {
   applyCW(TURN_DATA[fi]);
-  moveCount++;
+  if (lastTurn.face === fi) {
+    if (lastTurn.cw) {
+      lastTurn.cw = false;
+    } else {
+      lastTurn.face = -1;
+      moveCount--;
+    }
+  } else {
+    lastTurn.face = fi;
+    lastTurn.cw = true;
+    moveCount++;
+  }
   updateMoveCounter();
 }
 
 function turnFaceCCW(fi) {
   applyCCW(TURN_DATA[fi]);
-  moveCount++;
+  if (lastTurn.face === fi) {
+    if (!lastTurn.cw) {
+      lastTurn.cw = true;
+    } else {
+      lastTurn.face = -1;
+      moveCount--;
+    }
+  } else {
+    lastTurn.face = fi;
+    lastTurn.cw = false;
+    moveCount++;
+  }
   updateMoveCounter();
 }
 
 function scramble(moves) {
   moves = moves || 30;
+  var lastFace = -1;
+  var choices = 8;
   for (var i = 0; i < moves; i++) {
-    var face = Math.floor(Math.random() * 8);
+    var face = Math.floor(Math.random() * choices);
+    if (lastFace === -1) {
+      choices = 7;
+    } else if (face >= lastFace) {
+      face += 1;
+    }
+    lastFace = face;
     if (Math.random() < 0.5) {
       applyCW(TURN_DATA[face]);
     } else {
@@ -360,16 +393,20 @@ var projMatrix, viewMatrix;
 var shaderProgram;
 
 // Camera
-var camTheta = 0.6;  // horizontal angle
-var camPhi = 0.4;    // vertical angle
+var camTheta = -Math.PI / 6;  // horizontal angle
+var camPhi = Math.acos(1 / Math.sqrt(2 - 0.5));    // vertical angle
 var camDist = 4.5;
+var camPhiOffset = Math.PI / 3;
 
 function getCameraPos() {
-  return [
-    camDist * Math.cos(camPhi) * Math.sin(camTheta),
-    camDist * Math.sin(camPhi),
-    camDist * Math.cos(camPhi) * Math.cos(camTheta)
-  ];
+  var p = rotatePoint([-camDist / Math.sqrt(2), camDist / Math.sqrt(2), 0], vec3norm([-0.5, -0.5, 1]), -camPhi);
+  p = rotatePoint(p, vec3norm([1, 1, 1]), camTheta);
+  return p;
+  // return [
+  //   camDist * Math.cos(camPhi) * Math.sin(camTheta),
+  //   camDist * Math.sin(camPhi),
+  //   camDist * Math.cos(camPhi) * Math.cos(camTheta)
+  // ];
 }
 
 var VS_SRC = [
@@ -416,8 +453,8 @@ function initGL() {
 
   gl.clearColor(0.96, 0.96, 0.96, 1);
   gl.enable(gl.DEPTH_TEST);
-  gl.enable(gl.CULL_FACE);
-  gl.cullFace(gl.BACK);
+  // gl.enable(gl.CULL_FACE);
+  // gl.cullFace(gl.BACK);
 
   var vs = gl.createShader(gl.VERTEX_SHADER);
   gl.shaderSource(vs, VS_SRC);
@@ -438,8 +475,13 @@ function initGL() {
 }
 
 function resize() {
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
+  const dpr = window.devicePixelRatio;
+  const displayWidth = Math.round(canvas.clientWidth * dpr);
+  const displayHeight = Math.round(canvas.clientHeight * dpr);
+
+  canvas.width = displayWidth;
+  canvas.height = displayHeight;
+
   gl.viewport(0, 0, canvas.width, canvas.height);
   projMatrix = mat4perspective(Math.PI / 4, canvas.width / canvas.height, 0.1, 100);
 }
@@ -467,8 +509,8 @@ var SUBDIV_TRIS = [
   { idx: 8, verts: [[1,0,2],[0,1,2],[0,0,3]] }, // corner C
 ];
 
-var STICKER_SCALE = 0.97; // shrink factor for gap between stickers
-var GAP = 0.008;          // outward offset from octahedron surface
+var STICKER_SCALE = 0.94; // shrink factor for gap between stickers
+var GAP = 0.001;          // outward offset from octahedron surface
 
 function buildFaceGeometry(fi) {
   var fv = FACE_VERTS[fi];
@@ -514,7 +556,7 @@ function render() {
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
   var eye = getCameraPos();
-  viewMatrix = mat4lookAt(eye, [0,0,0], [0,1,0]);
+  viewMatrix = mat4lookAt(eye, [0,0,0], [1,1,1]);
 
   var uProj = gl.getUniformLocation(shaderProgram, "uProj");
   var uView = gl.getUniformLocation(shaderProgram, "uView");
@@ -687,7 +729,7 @@ function onPointerMove(e) {
   var y = e.clientY || (e.touches && e.touches[0].clientY);
   var dx = x - dragStartX;
   var dy = y - dragStartY;
-  if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragMoved = true;
+  if (Math.abs(dx) > 4 || Math.abs(dy) > 4) dragMoved = true;
   camTheta = dragStartTheta - dx * 0.01;
   camPhi = Math.max(-Math.PI/2 + 0.1, Math.min(Math.PI/2 - 0.1, dragStartPhi + dy * 0.01));
 }
@@ -709,8 +751,8 @@ function onPointerUp(e) {
 
 // Click/tap: ray-cast to find which face was clicked, then turn it
 function handleClick(screenX, screenY, isRight) {
-  var ndcX = (screenX / canvas.width) * 2 - 1;
-  var ndcY = 1 - (screenY / canvas.height) * 2;
+  var ndcX = (screenX * window.devicePixelRatio / canvas.width) * 2 - 1;
+  var ndcY = 1 - (screenY * window.devicePixelRatio / canvas.height) * 2;
 
   var invProj = invertMat4(projMatrix);
   var invView = invertMat4(viewMatrix);
@@ -823,7 +865,7 @@ function init() {
   canvas.addEventListener("contextmenu", function(e) { e.preventDefault(); });
 
   // Start scrambled
-  //scramble(30);
+  scramble(30);
 
   mainLoop();
 }
