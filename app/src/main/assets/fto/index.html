@@ -1,0 +1,876 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+<title>FTO Puzzle</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: #f5f5f5; }
+canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+#move-counter {
+  position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+  font-family: 'Helvetica Neue', Arial, sans-serif; font-size: 20px;
+  color: #333; background: rgba(255,255,255,0.8); padding: 4px 16px;
+  border-radius: 16px; pointer-events: none; user-select: none;
+  z-index: 1;
+}
+</style>
+</head>
+<body>
+<div id="move-counter">Moves: 0</div>
+<script>
+"use strict";
+
+// ============================================================
+// FTO Color Scheme: 8 face colors, easily changeable
+// ============================================================
+var FTO_COLORS = [
+  "#FFFFFF", // face 0 - White   (top-front)
+  "#880088", // face 1 - Green   (top-right)
+  "#00AA00", // face 2 - Blue    (top-back)
+  "#FF0000", // face 3 - Orange  (top-left)
+  "#0000FF", // face 4 - Red     (bottom-front)
+  "#FFAA00", // face 5 - Yellow  (bottom-right)
+  "#FFFF00", // face 6 - Purple  (bottom-back)
+  "#888888"  // face 7 - Grey    (bottom-left)
+];
+
+// ============================================================
+// Math utilities
+// ============================================================
+function vec3(x, y, z) { return [x, y, z]; }
+function vec3add(a, b) { return [a[0]+b[0], a[1]+b[1], a[2]+b[2]]; }
+function vec3sub(a, b) { return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }
+function vec3scale(a, s) { return [a[0]*s, a[1]*s, a[2]*s]; }
+function vec3dot(a, b) { return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
+function vec3cross(a, b) { return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; }
+function vec3len(a) { return Math.sqrt(a[0]*a[0]+a[1]*a[1]+a[2]*a[2]); }
+function vec3norm(a) { var l = vec3len(a); return l > 0 ? [a[0]/l, a[1]/l, a[2]/l] : [0,0,0]; }
+function vec3lerp(a, b, t) { return [a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t]; }
+
+function mat4() { var m = new Float32Array(16); m[0]=m[5]=m[10]=m[15]=1; return m; }
+function mat4mul(a, b) {
+  var r = new Float32Array(16);
+  for (var i = 0; i < 4; i++)
+    for (var j = 0; j < 4; j++) {
+      r[i*4+j] = 0;
+      for (var k = 0; k < 4; k++) r[i*4+j] += a[i*4+k] * b[k*4+j];
+    }
+  return r;
+}
+function mat4perspective(fov, aspect, near, far) {
+  var f = 1/Math.tan(fov/2), nf = 1/(near-far), m = new Float32Array(16);
+  m[0]=f/aspect; m[5]=f; m[10]=(far+near)*nf; m[11]=-1; m[14]=2*far*near*nf;
+  return m;
+}
+function mat4lookAt(eye, center, up) {
+  var z = vec3norm(vec3sub(eye, center));
+  var x = vec3norm(vec3cross(up, z));
+  var y = vec3cross(z, x);
+  var m = mat4();
+  m[0]=x[0]; m[4]=x[1]; m[8]=x[2];
+  m[1]=y[0]; m[5]=y[1]; m[9]=y[2];
+  m[2]=z[0]; m[6]=z[1]; m[10]=z[2];
+  m[12]=-(x[0]*eye[0]+x[1]*eye[1]+x[2]*eye[2]);
+  m[13]=-(y[0]*eye[0]+y[1]*eye[1]+y[2]*eye[2]);
+  m[14]=-(z[0]*eye[0]+z[1]*eye[1]+z[2]*eye[2]);
+  return m;
+}
+function mat4rotate(angle, ax) {
+  var c = Math.cos(angle), s = Math.sin(angle), t = 1-c;
+  var x=ax[0], y=ax[1], z=ax[2];
+  var m = mat4();
+  m[0]=t*x*x+c;   m[1]=t*x*y+s*z; m[2]=t*x*z-s*y;
+  m[4]=t*x*y-s*z; m[5]=t*y*y+c;   m[6]=t*y*z+s*x;
+  m[8]=t*x*z+s*y; m[9]=t*y*z-s*x; m[10]=t*z*z+c;
+  return m;
+}
+function mat4transform(m, v) {
+  var x=v[0], y=v[1], z=v[2];
+  var w = m[3]*x+m[7]*y+m[11]*z+m[15]; if(w===0) w=1;
+  return [(m[0]*x+m[4]*y+m[8]*z+m[12])/w,
+          (m[1]*x+m[5]*y+m[9]*z+m[13])/w,
+          (m[2]*x+m[6]*y+m[10]*z+m[14])/w];
+}
+function rotatePoint(p, axis, angle) {
+  var m = mat4rotate(angle, axis);
+  return mat4transform(m, p);
+}
+
+function hexToRGB(hex) {
+  var v = parseInt(hex.slice(1), 16);
+  return [(v>>16&255)/255, (v>>8&255)/255, (v&255)/255];
+}
+
+// ============================================================
+// FTO Puzzle Model
+// ============================================================
+// The FTO (Face-Turning Octahedron) is a regular octahedron with 8 triangular
+// faces that turn. Each face turn is 120° (C3 symmetry of equilateral triangle).
+// 3 turns = 360° = full rotation.
+//
+// Piece types:
+// - 6 corner pieces (4 colored stickers each) at the 6 vertices
+// - 12 edge pieces (2 colored stickers each) on the 12 edges
+// - 24 center pieces (1 colored sticker each) filling the remaining gaps
+//
+// Each face has 9 stickers: 3 corners + 3 edges + 3 centers = 9
+// Total: 8 faces × 9 stickers = 72 stickers
+
+var TURN_ANGLE = Math.PI * 2 / 3; // 120 degrees
+
+// Octahedron vertices (numbered 0-5)
+var VERT = [
+  vec3( 0,  1,  0),  // 0 Top
+  vec3( 0,  0,  1),  // 1 Front
+  vec3( 1,  0,  0),  // 2 Right
+  vec3( 0,  0, -1),  // 3 Back
+  vec3(-1,  0,  0),  // 4 Left
+  vec3( 0, -1,  0),  // 5 Bottom
+];
+
+// 8 faces defined by vertex indices [A, B, C] (CCW when viewed from outside)
+var FACE_VERTS = [
+  [0, 1, 2],  // 0 TFR (top-front-right)
+  [0, 2, 3],  // 1 TRB (top-right-back)
+  [0, 3, 4],  // 2 TBL (top-back-left)
+  [0, 4, 1],  // 3 TLF (top-left-front)
+  [5, 2, 1],  // 4 BRF (bottom-right-front)
+  [5, 3, 2],  // 5 BBR (bottom-back-right)
+  [5, 4, 3],  // 6 BLB (bottom-left-back)
+  [5, 1, 4],  // 7 BFL (bottom-front-left)
+];
+
+// Face data with normals
+var FACES = [];
+for (var i = 0; i < FACE_VERTS.length; i++) {
+  var fv = FACE_VERTS[i];
+  var verts = [VERT[fv[0]], VERT[fv[1]], VERT[fv[2]]];
+  var e1 = vec3sub(verts[1], verts[0]);
+  var e2 = vec3sub(verts[2], verts[0]);
+  FACES[i] = { verts: verts, normal: vec3norm(vec3cross(e1, e2)) };
+}
+
+// ============================================================
+// FTO Sticker Layout
+// ============================================================
+// Each triangular face is subdivided into 9 small triangles (3×3 grid):
+//
+//           /\
+//          / 0\           <- corner at vertex A
+//         /----\
+//        /1\ 2/3\         <- 1=edge(AB), 2=center, 3=edge(AC)
+//       /---\/---\
+//      /4\ 5/6\ 7/8\      <- 4=corner(B), 5=center, 6=edge(BC), 7=center, 8=corner(C)
+//     /---\/---\/---\
+//
+// Sticker indices:
+//   0 = corner at vertex A    4 = corner at vertex B    8 = corner at vertex C
+//   1 = edge on AB            3 = edge on AC            6 = edge on BC
+//   2 = center (near A)       5 = center (near B)       7 = center (near C)
+
+// ============================================================
+// FTO State
+// ============================================================
+var stickers = [];
+var moveCount = 0;
+
+function initState() {
+  stickers = [];
+  for (var f = 0; f < 8; f++) {
+    stickers[f] = [];
+    for (var s = 0; s < 9; s++) {
+      stickers[f][s] = f;
+    }
+  }
+  moveCount = 0;
+  updateMoveCounter();
+}
+
+function updateMoveCounter() {
+  document.getElementById("move-counter").textContent = "Moves: " + moveCount;
+}
+
+// ============================================================
+// FTO Turn Logic
+// ============================================================
+// CW 120° on-face permutation (viewed from outside):
+// Corners: A->C->B->A, i.e. positions (0, 8, 4)
+// Edges: AB->BC->CA, i.e. positions (1, 3, 6)
+// Centers: positions (2, 7, 5)
+var ON_FACE_CW = [[0,8,4],[1,3,6],[2,7,5]];
+
+// Faces around each vertex (in CW order when viewed from the vertex outward)
+var vertexFaces = [
+  [0, 1, 2, 3],   // vertex 0 (Top)
+  [0, 3, 7, 4],   // vertex 1 (Front)
+  [0, 4, 5, 1],   // vertex 2 (Right)
+  [1, 5, 6, 2],   // vertex 3 (Back)
+  [2, 6, 7, 3],   // vertex 4 (Left)
+  [4, 7, 6, 5],   // vertex 5 (Bottom)
+];
+
+// Returns the edge sticker index for the edge between vertices v1 and v2 on a face
+function layerStickersOnFace(face, v1, v2) {
+  var fv = FACE_VERTS[face];
+  var i1 = -1, i2 = -1;
+  for (var j = 0; j < 3; j++) {
+    if (fv[j] === v1) i1 = j;
+    if (fv[j] === v2) i2 = j;
+  }
+  if ((i1===0&&i2===1)||(i1===1&&i2===0)) return [4, 5, 1, 2, 0];
+  if ((i1===1&&i2===2)||(i1===2&&i2===1)) return [8, 7, 6, 5, 4];
+  return [0, 2, 3, 7, 8];
+}
+
+// Returns the sticker index of the corner at the given vertex on the given face
+function cornerStickerIndexOnFace(face, vertexIdx) {
+  var fv = FACE_VERTS[face];
+  for (var j = 0; j < 3; j++) {
+    if (fv[j] === vertexIdx) return j * 4;
+  }
+  return -1;
+}
+
+// Returns the face around a vertex opposite to the given face
+function oppositeFaceAroundVertex(v, face) {
+  var vf = vertexFaces[v];
+  var faceIdx = -1;
+  for (var j = 0; j < 4; j++) {
+    if (vf[j] === face) { faceIdx = j; break; }
+  }
+  return vf[(faceIdx + 2) % 4];
+}
+
+// Build CW turn permutation cycles for a face.
+// Returns array of 3-element cycles, each cycle is [[face,sticker], [face,sticker], [face,sticker]].
+// Cycle (a, b, c) means: piece at a moves to b, b moves to c, c moves to a.
+function buildTurnCW(fi) {
+  var fv = FACE_VERTS[fi];
+  var A = fv[0], B = fv[1], C = fv[2];
+
+  // Find adjacent faces sharing each edge
+  var fAB = -1, fBC = -1, fAC = -1;
+  for (var i = 0; i < 8; i++) {
+    if (i === fi) continue;
+    var has = [false, false, false];
+    for (var j = 0; j < 3; j++) {
+      if (FACE_VERTS[i][j] === A) has[0] = true;
+      if (FACE_VERTS[i][j] === B) has[1] = true;
+      if (FACE_VERTS[i][j] === C) has[2] = true;
+    }
+    if (has[0] && has[1]) fAB = i;
+    if (has[1] && has[2]) fBC = i;
+    if (has[0] && has[2]) fAC = i;
+  }
+
+  var cycles = [];
+
+  // On-face cycles (all 9 stickers on this face)
+  for (var ci = 0; ci < ON_FACE_CW.length; ci++) {
+    var cyc = ON_FACE_CW[ci];
+    cycles.push([[fi, cyc[0]], [fi, cyc[1]], [fi, cyc[2]]]);
+  }
+
+  // Off-face sticker cycle on adjacent face, 5 stickers in each layer
+  // When face turns CW: edge AB -> AC, AC -> BC, BC -> AB
+  var lAB = layerStickersOnFace(fAB, A, B);
+  var lAC = layerStickersOnFace(fAC, A, C);
+  var lBC = layerStickersOnFace(fBC, B, C);
+
+  for (var k = 0; k < 5; k++) {
+    cycles.push([[fAB, lAB[k]], [fAC, lAC[k]], [fBC, lBC[k]]]);
+  }
+
+  // Off-face corner cycles: corner stickers on opposite faces cycle
+  // When CW: corner A -> C, C -> B, B -> A
+  var faceA = oppositeFaceAroundVertex(A, fi);
+  var faceC = oppositeFaceAroundVertex(C, fi);
+  var faceB = oppositeFaceAroundVertex(B, fi);
+
+  var sA = cornerStickerIndexOnFace(faceA, A);
+  var sC = cornerStickerIndexOnFace(faceC, C);
+  var sB = cornerStickerIndexOnFace(faceB, B);
+  cycles.push([[faceA, sA], [faceC, sC], [faceB, sB]]);
+
+  return cycles;
+}
+
+// Apply CW turn: cycle (a, b, c) means a->b, b->c, c->a
+function applyCW(cycles) {
+  for (var i = 0; i < cycles.length; i++) {
+    var cyc = cycles[i];
+    var a = cyc[0], b = cyc[1], c = cyc[2];
+    var tmp = stickers[a[0]][a[1]];
+    stickers[a[0]][a[1]] = stickers[c[0]][c[1]];
+    stickers[c[0]][c[1]] = stickers[b[0]][b[1]];
+    stickers[b[0]][b[1]] = tmp;
+  }
+}
+
+// Apply CCW turn (reverse of CW)
+function applyCCW(cycles) {
+  for (var i = 0; i < cycles.length; i++) {
+    var cyc = cycles[i];
+    var a = cyc[0], b = cyc[1], c = cyc[2];
+    var tmp = stickers[a[0]][a[1]];
+    stickers[a[0]][a[1]] = stickers[b[0]][b[1]];
+    stickers[b[0]][b[1]] = stickers[c[0]][c[1]];
+    stickers[c[0]][c[1]] = tmp;
+  }
+}
+
+// Precompute turn data for all 8 faces
+var TURN_DATA = [];
+for (var fi = 0; fi < 8; fi++) {
+  TURN_DATA[fi] = buildTurnCW(fi);
+}
+
+var lastTurn = { face: -1, cw: false };
+
+function turnFaceCW(fi) {
+  applyCW(TURN_DATA[fi]);
+  if (lastTurn.face === fi) {
+    if (lastTurn.cw) {
+      lastTurn.cw = false;
+    } else {
+      lastTurn.face = -1;
+      moveCount--;
+    }
+  } else {
+    lastTurn.face = fi;
+    lastTurn.cw = true;
+    moveCount++;
+  }
+  updateMoveCounter();
+}
+
+function turnFaceCCW(fi) {
+  applyCCW(TURN_DATA[fi]);
+  if (lastTurn.face === fi) {
+    if (!lastTurn.cw) {
+      lastTurn.cw = true;
+    } else {
+      lastTurn.face = -1;
+      moveCount--;
+    }
+  } else {
+    lastTurn.face = fi;
+    lastTurn.cw = false;
+    moveCount++;
+  }
+  updateMoveCounter();
+}
+
+function scramble(moves) {
+  moves = moves || 30;
+  var lastFace = -1;
+  var choices = 8;
+  for (var i = 0; i < moves; i++) {
+    var face = Math.floor(Math.random() * choices);
+    if (lastFace === -1) {
+      choices = 7;
+    } else if (face >= lastFace) {
+      face += 1;
+    }
+    lastFace = face;
+    if (Math.random() < 0.5) {
+      applyCW(TURN_DATA[face]);
+    } else {
+      applyCCW(TURN_DATA[face]);
+    }
+  }
+  moveCount = 0;
+  updateMoveCounter();
+}
+
+// ============================================================
+// 3D Rendering with WebGL
+// ============================================================
+var canvas, gl;
+var projMatrix, viewMatrix;
+var shaderProgram;
+
+// Camera
+var camTheta = -Math.PI / 6;  // horizontal angle
+var camPhi = Math.acos(1 / Math.sqrt(2 - 0.5));    // vertical angle
+var camDist = 4.5;
+var camPhiOffset = Math.PI / 3;
+
+function getCameraPos() {
+  var p = rotatePoint([-camDist / Math.sqrt(2), camDist / Math.sqrt(2), 0], vec3norm([-0.5, -0.5, 1]), -camPhi);
+  p = rotatePoint(p, vec3norm([1, 1, 1]), camTheta);
+  return p;
+  // return [
+  //   camDist * Math.cos(camPhi) * Math.sin(camTheta),
+  //   camDist * Math.sin(camPhi),
+  //   camDist * Math.cos(camPhi) * Math.cos(camTheta)
+  // ];
+}
+
+var VS_SRC = [
+  "attribute vec3 aPosition;",
+  "attribute vec3 aNormal;",
+  "attribute vec3 aColor;",
+  "uniform mat4 uProj;",
+  "uniform mat4 uView;",
+  "varying vec3 vColor;",
+  "varying vec3 vNormal;",
+  "varying vec3 vPos;",
+  "void main() {",
+  "  vColor = aColor;",
+  "  vNormal = aNormal;",
+  "  vPos = aPosition;",
+  "  gl_Position = uProj * uView * vec4(aPosition, 1.0);",
+  "}"
+].join("\n");
+
+var FS_SRC = [
+  "precision mediump float;",
+  "varying vec3 vColor;",
+  "varying vec3 vNormal;",
+  "varying vec3 vPos;",
+  "uniform vec3 uLightDir;",
+  "void main() {",
+  "  vec3 n = normalize(vNormal);",
+  "  float diff = max(dot(n, uLightDir), 0.0);",
+  "  float amb = 0.95;",
+  "  vec3 col = vColor * (amb + (1.0 - amb) * diff);",
+  "  gl_FragColor = vec4(col, 1.0);",
+  "}"
+].join("\n");
+
+function initGL() {
+  canvas = document.createElement("canvas");
+  canvas.style.position = "absolute";
+  canvas.style.top = "0";
+  canvas.style.left = "0";
+  document.body.appendChild(canvas);
+
+  gl = canvas.getContext("webgl", { antialias: true, alpha: false });
+  if (!gl) { alert("WebGL not supported"); return; }
+
+  gl.clearColor(0.96, 0.96, 0.96, 1);
+  gl.enable(gl.DEPTH_TEST);
+  // gl.enable(gl.CULL_FACE);
+  // gl.cullFace(gl.BACK);
+
+  var vs = gl.createShader(gl.VERTEX_SHADER);
+  gl.shaderSource(vs, VS_SRC);
+  gl.compileShader(vs);
+
+  var fs = gl.createShader(gl.FRAGMENT_SHADER);
+  gl.shaderSource(fs, FS_SRC);
+  gl.compileShader(fs);
+
+  shaderProgram = gl.createProgram();
+  gl.attachShader(shaderProgram, vs);
+  gl.attachShader(shaderProgram, fs);
+  gl.linkProgram(shaderProgram);
+  gl.useProgram(shaderProgram);
+
+  resize();
+  window.addEventListener("resize", resize);
+}
+
+function resize() {
+  const dpr = window.devicePixelRatio;
+  const displayWidth = Math.round(canvas.clientWidth * dpr);
+  const displayHeight = Math.round(canvas.clientHeight * dpr);
+
+  canvas.width = displayWidth;
+  canvas.height = displayHeight;
+
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  projMatrix = mat4perspective(Math.PI / 4, canvas.width / canvas.height, 0.1, 100);
+}
+
+// ============================================================
+// 3D Geometry for the FTO
+// ============================================================
+// Each face is subdivided into 9 small triangles using barycentric coordinates.
+// Grid points: (i,j,k) with i+j+k=3, position = (i*P0 + j*P1 + k*P2) / 3
+
+function subdivPoint(p0, p1, p2, i, j, k) {
+  return vec3scale(vec3add(vec3add(vec3scale(p0, i), vec3scale(p1, j)), vec3scale(p2, k)), 1/3);
+}
+
+// 9 subdivision triangles mapped to sticker indices
+var SUBDIV_TRIS = [
+  { idx: 0, verts: [[3,0,0],[2,1,0],[2,0,1]] }, // corner A
+  { idx: 1, verts: [[2,1,0],[1,2,0],[1,1,1]] }, // edge AB
+  { idx: 2, verts: [[2,1,0],[1,1,1],[2,0,1]] }, // center (near A)
+  { idx: 3, verts: [[2,0,1],[1,1,1],[1,0,2]] }, // edge AC
+  { idx: 4, verts: [[1,2,0],[0,3,0],[0,2,1]] }, // corner B
+  { idx: 5, verts: [[1,2,0],[0,2,1],[1,1,1]] }, // center (near B)
+  { idx: 6, verts: [[1,1,1],[0,2,1],[0,1,2]] }, // edge BC
+  { idx: 7, verts: [[1,1,1],[0,1,2],[1,0,2]] }, // center (near C)
+  { idx: 8, verts: [[1,0,2],[0,1,2],[0,0,3]] }, // corner C
+];
+
+var STICKER_SCALE = 0.94; // shrink factor for gap between stickers
+var GAP = 0.001;          // outward offset from octahedron surface
+
+function buildFaceGeometry(fi) {
+  var fv = FACE_VERTS[fi];
+  var P0 = VERT[fv[0]], P1 = VERT[fv[1]], P2 = VERT[fv[2]];
+  var normal = FACES[fi].normal;
+
+  var tris = [];
+  for (var si = 0; si < 9; si++) {
+    var sd = SUBDIV_TRIS[si];
+    var v0 = subdivPoint(P0, P1, P2, sd.verts[0][0], sd.verts[0][1], sd.verts[0][2]);
+    var v1 = subdivPoint(P0, P1, P2, sd.verts[1][0], sd.verts[1][1], sd.verts[1][2]);
+    var v2 = subdivPoint(P0, P1, P2, sd.verts[2][0], sd.verts[2][1], sd.verts[2][2]);
+
+    // Shrink toward center for gap effect
+    var center = vec3scale(vec3add(vec3add(v0, v1), v2), 1/3);
+    var ov0 = vec3lerp(center, v0, STICKER_SCALE);
+    var ov1 = vec3lerp(center, v1, STICKER_SCALE);
+    var ov2 = vec3lerp(center, v2, STICKER_SCALE);
+
+    // Push slightly outward
+    ov0 = vec3add(ov0, vec3scale(normal, GAP));
+    ov1 = vec3add(ov1, vec3scale(normal, GAP));
+    ov2 = vec3add(ov2, vec3scale(normal, GAP));
+
+    tris.push({ face: fi, sticker: sd.idx, verts: [v0, v1, v2], outer_verts: [ov0, ov1, ov2], normal: normal });
+  }
+  return tris;
+}
+
+// ============================================================
+// Rendering
+// ============================================================
+var allStickerTris = [];
+
+function buildAllGeometry() {
+  allStickerTris = [];
+  for (var fi = 0; fi < 8; fi++) {
+    allStickerTris = allStickerTris.concat(buildFaceGeometry(fi));
+  }
+}
+
+function render() {
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  var eye = getCameraPos();
+  viewMatrix = mat4lookAt(eye, [0,0,0], [1,1,1]);
+
+  var uProj = gl.getUniformLocation(shaderProgram, "uProj");
+  var uView = gl.getUniformLocation(shaderProgram, "uView");
+  var uLight = gl.getUniformLocation(shaderProgram, "uLightDir");
+
+  gl.uniformMatrix4fv(uProj, false, projMatrix);
+  gl.uniformMatrix4fv(uView, false, viewMatrix);
+  gl.uniform3fv(uLight, vec3norm([0.5, 1.0, 0.8]));
+
+  var aPos = gl.getAttribLocation(shaderProgram, "aPosition");
+  var aNorm = gl.getAttribLocation(shaderProgram, "aNormal");
+  var aCol = gl.getAttribLocation(shaderProgram, "aColor");
+
+  gl.enableVertexAttribArray(aPos);
+  gl.enableVertexAttribArray(aNorm);
+  gl.enableVertexAttribArray(aCol);
+
+  // drawTriangles(bodyTris, null, aPos, aNorm, aCol);
+  drawTriangles(allStickerTris, stickers, aPos, aNorm, aCol);
+}
+
+function drawTriangles(tris, stickerState, aPos, aNorm, aCol) {
+  var positions = [];
+  var normals = [];
+  var colors = [];
+
+  for (var i = 0; i < tris.length; i++) {
+    var t = tris[i];
+    var col;
+    if (stickerState) {
+      var colorIdx = stickerState[t.face][t.sticker];
+      col = hexToRGB(FTO_COLORS[colorIdx]);
+    }
+
+    var v = t.verts;
+    var ov = t.outer_verts;
+    var n = t.normal;
+
+    // Apply animation rotation if this sticker is part of the animating face
+    if (animating && stickerState) {
+      var shouldAnimate = false;
+      if (t.face === animFace) {
+        shouldAnimate = true;
+      } else {
+        // Check if this sticker is in any off-face cycle
+        var cycles = TURN_DATA[animFace];
+        for (var ci = 3; ci < cycles.length; ci++) {
+          for (var cj = 0; cj < 3; cj++) {
+            if (cycles[ci][cj][0] === t.face && cycles[ci][cj][1] === t.sticker) {
+              shouldAnimate = true;
+              break;
+            }
+          }
+          if (shouldAnimate) break;
+        }
+      }
+
+      if (shouldAnimate) {
+        var axis = FACES[animFace].normal;
+        var angle = -animDir * TURN_ANGLE * animProgress;
+        v = [
+          rotatePoint(v[0], axis, angle),
+          rotatePoint(v[1], axis, angle),
+          rotatePoint(v[2], axis, angle)
+        ];
+        ov = [
+          rotatePoint(ov[0], axis, angle),
+          rotatePoint(ov[1], axis, angle),
+          rotatePoint(ov[2], axis, angle)
+        ];
+        n = rotatePoint(n, axis, angle);
+      }
+    }
+
+    for (var j = 0; j < 3; j++) {
+      positions.push(v[j][0], v[j][1], v[j][2]);
+      normals.push(n[0], n[1], n[2]);
+      colors.push(0.15, 0.15, 0.15);
+    }
+    for (var j = 0; j < 3; j++) {
+      positions.push(ov[j][0], ov[j][1], ov[j][2]);
+      normals.push(n[0], n[1], n[2]);
+      colors.push(col[0], col[1], col[2]);
+    }
+  }
+
+  var posBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.DYNAMIC_DRAW);
+  gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 0, 0);
+
+  var normBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, normBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(normals), gl.DYNAMIC_DRAW);
+  gl.vertexAttribPointer(aNorm, 3, gl.FLOAT, false, 0, 0);
+
+  var colBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, colBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(colors), gl.DYNAMIC_DRAW);
+  gl.vertexAttribPointer(aCol, 3, gl.FLOAT, false, 0, 0);
+
+  gl.drawArrays(gl.TRIANGLES, 0, positions.length / 3);
+
+  gl.deleteBuffer(posBuf);
+  gl.deleteBuffer(normBuf);
+  gl.deleteBuffer(colBuf);
+}
+
+// ============================================================
+// Animation
+// ============================================================
+var animating = false;
+var animFace = -1;
+var animDir = 1; // 1 = CW, -1 = CCW
+var animProgress = 0;
+var ANIM_DURATION = 300; // ms
+var animStartTime = 0;
+
+function animateTurn(face, dir) {
+  if (animating) return;
+  animating = true;
+  animFace = face;
+  animDir = dir;
+  animProgress = 0;
+  animStartTime = performance.now();
+}
+
+function updateAnimation() {
+  if (!animating) return;
+  var elapsed = performance.now() - animStartTime;
+  animProgress = Math.min(elapsed / ANIM_DURATION, 1);
+
+  // Ease in-out
+  animProgress = animProgress < 0.5
+    ? 2 * animProgress * animProgress
+    : 1 - Math.pow(-2 * animProgress + 2, 2) / 2;
+
+  if (elapsed >= ANIM_DURATION) {
+    animating = false;
+    animProgress = 0;
+    if (animDir > 0) turnFaceCW(animFace);
+    else turnFaceCCW(animFace);
+  }
+}
+
+// ============================================================
+// Interaction: orbit camera + face clicking
+// ============================================================
+var isDragging = false;
+var dragStartX, dragStartY;
+var dragStartTheta, dragStartPhi;
+var dragMoved = false;
+
+function onPointerDown(e) {
+  e.preventDefault();
+  var x = e.clientX || (e.touches && e.touches[0].clientX);
+  var y = e.clientY || (e.touches && e.touches[0].clientY);
+  isDragging = true;
+  dragMoved = false;
+  dragStartX = x;
+  dragStartY = y;
+  dragStartTheta = camTheta;
+  dragStartPhi = camPhi;
+}
+
+function onPointerMove(e) {
+  if (!isDragging) return;
+  e.preventDefault();
+  var x = e.clientX || (e.touches && e.touches[0].clientX);
+  var y = e.clientY || (e.touches && e.touches[0].clientY);
+  var dx = x - dragStartX;
+  var dy = y - dragStartY;
+  if (Math.abs(dx) > 4 || Math.abs(dy) > 4) dragMoved = true;
+  camTheta = dragStartTheta - dx * 0.01;
+  camPhi = Math.max(-Math.PI/2 + 0.1, Math.min(Math.PI/2 - 0.1, dragStartPhi + dy * 0.01));
+}
+
+function onPointerUp(e) {
+  isDragging = false;
+  if (!dragMoved && !animating) {
+    var x, y;
+    if (e.changedTouches) {
+      x = e.changedTouches[0].clientX;
+      y = e.changedTouches[0].clientY;
+    } else {
+      x = e.clientX;
+      y = e.clientY;
+    }
+    handleClick(x, y, e.button === 2 || e.shiftKey);
+  }
+}
+
+// Click/tap: ray-cast to find which face was clicked, then turn it
+function handleClick(screenX, screenY, isRight) {
+  var ndcX = (screenX * window.devicePixelRatio / canvas.width) * 2 - 1;
+  var ndcY = 1 - (screenY * window.devicePixelRatio / canvas.height) * 2;
+
+  var invProj = invertMat4(projMatrix);
+  var invView = invertMat4(viewMatrix);
+
+  var clipNear = [ndcX, ndcY, -1];
+  var clipFar = [ndcX, ndcY, 1];
+
+  var eyeNear = mat4transform(invProj, clipNear);
+  var eyeFar = mat4transform(invProj, clipFar);
+
+  var worldNear = mat4transform(invView, eyeNear);
+  var worldFar = mat4transform(invView, eyeFar);
+
+  var rayOrigin = worldNear;
+  var rayDir = vec3norm(vec3sub(worldFar, worldNear));
+
+  var bestT = Infinity;
+  var bestFace = -1;
+
+  for (var fi = 0; fi < 8; fi++) {
+    var fv = FACE_VERTS[fi];
+    var P0 = VERT[fv[0]], P1 = VERT[fv[1]], P2 = VERT[fv[2]];
+    var t = rayTriangleIntersect(rayOrigin, rayDir, P0, P1, P2);
+    if (t !== null && t < bestT) {
+      bestT = t;
+      bestFace = fi;
+    }
+  }
+
+  if (bestFace >= 0) {
+    animateTurn(bestFace, isRight ? -1 : 1);
+  }
+}
+
+// Möller–Trumbore ray-triangle intersection
+function rayTriangleIntersect(origin, dir, v0, v1, v2) {
+  var e1 = vec3sub(v1, v0);
+  var e2 = vec3sub(v2, v0);
+  var h = vec3cross(dir, e2);
+  var a = vec3dot(e1, h);
+  if (Math.abs(a) < 1e-8) return null;
+  var f = 1 / a;
+  var s = vec3sub(origin, v0);
+  var u = f * vec3dot(s, h);
+  if (u < 0 || u > 1) return null;
+  var q = vec3cross(s, e1);
+  var v = f * vec3dot(dir, q);
+  if (v < 0 || u + v > 1) return null;
+  var t = f * vec3dot(e2, q);
+  return t > 0.001 ? t : null;
+}
+
+// General 4x4 matrix inverse
+function invertMat4(m) {
+  var inv = new Float32Array(16);
+  inv[0]  =  m[5]*m[10]*m[15]-m[5]*m[11]*m[14]-m[9]*m[6]*m[15]+m[9]*m[7]*m[14]+m[13]*m[6]*m[11]-m[13]*m[7]*m[10];
+  inv[4]  = -m[4]*m[10]*m[15]+m[4]*m[11]*m[14]+m[8]*m[6]*m[15]-m[8]*m[7]*m[14]-m[12]*m[6]*m[11]+m[12]*m[7]*m[10];
+  inv[8]  =  m[4]*m[9]*m[15]-m[4]*m[11]*m[13]-m[8]*m[5]*m[15]+m[8]*m[7]*m[13]+m[12]*m[5]*m[11]-m[12]*m[7]*m[9];
+  inv[12] = -m[4]*m[9]*m[14]+m[4]*m[10]*m[13]+m[8]*m[5]*m[14]-m[8]*m[6]*m[13]-m[12]*m[5]*m[10]+m[12]*m[6]*m[9];
+  inv[1]  = -m[1]*m[10]*m[15]+m[1]*m[11]*m[14]+m[9]*m[2]*m[15]-m[9]*m[3]*m[14]-m[13]*m[2]*m[11]+m[13]*m[3]*m[10];
+  inv[5]  =  m[0]*m[10]*m[15]-m[0]*m[11]*m[14]-m[8]*m[2]*m[15]+m[8]*m[3]*m[14]+m[12]*m[2]*m[11]-m[12]*m[3]*m[10];
+  inv[9]  = -m[0]*m[9]*m[15]+m[0]*m[11]*m[13]+m[8]*m[1]*m[15]-m[8]*m[3]*m[13]-m[12]*m[1]*m[11]+m[12]*m[3]*m[9];
+  inv[13] =  m[0]*m[9]*m[14]-m[0]*m[10]*m[13]-m[8]*m[1]*m[14]+m[8]*m[2]*m[13]+m[12]*m[1]*m[10]-m[12]*m[2]*m[9];
+  inv[2]  =  m[1]*m[6]*m[15]-m[1]*m[7]*m[14]-m[5]*m[2]*m[15]+m[5]*m[3]*m[14]+m[13]*m[2]*m[7]-m[13]*m[3]*m[6];
+  inv[6]  = -m[0]*m[6]*m[15]+m[0]*m[7]*m[14]+m[4]*m[2]*m[15]-m[4]*m[3]*m[14]-m[12]*m[2]*m[7]+m[12]*m[3]*m[6];
+  inv[10] =  m[0]*m[5]*m[15]-m[0]*m[7]*m[13]-m[4]*m[1]*m[15]+m[4]*m[3]*m[13]+m[12]*m[1]*m[7]-m[12]*m[3]*m[5];
+  inv[14] = -m[0]*m[5]*m[14]+m[0]*m[6]*m[13]+m[4]*m[1]*m[14]-m[4]*m[2]*m[13]-m[12]*m[1]*m[6]+m[12]*m[2]*m[5];
+  inv[3]  = -m[1]*m[6]*m[11]+m[1]*m[7]*m[10]+m[5]*m[2]*m[11]-m[5]*m[3]*m[10]-m[9]*m[2]*m[7]+m[9]*m[3]*m[6];
+  inv[7]  =  m[0]*m[6]*m[11]-m[0]*m[7]*m[10]-m[4]*m[2]*m[11]+m[4]*m[3]*m[10]+m[8]*m[2]*m[7]-m[8]*m[3]*m[6];
+  inv[11] = -m[0]*m[5]*m[11]+m[0]*m[7]*m[9]+m[4]*m[1]*m[11]-m[4]*m[3]*m[9]-m[8]*m[1]*m[7]+m[8]*m[3]*m[5];
+  inv[15] =  m[0]*m[5]*m[10]-m[0]*m[6]*m[9]-m[4]*m[1]*m[10]+m[4]*m[2]*m[9]+m[8]*m[1]*m[6]-m[8]*m[2]*m[5];
+
+  var det = m[0]*inv[0]+m[1]*inv[4]+m[2]*inv[8]+m[3]*inv[12];
+  if (Math.abs(det) < 1e-10) return mat4();
+  det = 1 / det;
+  for (var i = 0; i < 16; i++) inv[i] *= det;
+  return inv;
+}
+
+// ============================================================
+// Main loop
+// ============================================================
+function mainLoop() {
+  updateAnimation();
+  render();
+  requestAnimationFrame(mainLoop);
+}
+
+// Scramble exposed for Android bridge
+window.ftoScramble = function() {
+  if (animating) return;
+  initState();
+  scramble(30);
+};
+
+// ============================================================
+// Init
+// ============================================================
+function init() {
+  initState();
+  initGL();
+  buildAllGeometry();
+
+  canvas.addEventListener("mousedown", onPointerDown);
+  canvas.addEventListener("mousemove", onPointerMove);
+  canvas.addEventListener("mouseup", onPointerUp);
+  canvas.addEventListener("touchstart", onPointerDown, { passive: false });
+  canvas.addEventListener("touchmove", onPointerMove, { passive: false });
+  canvas.addEventListener("touchend", onPointerUp, { passive: false });
+  canvas.addEventListener("contextmenu", function(e) { e.preventDefault(); });
+
+  // Start scrambled
+  scramble(30);
+
+  mainLoop();
+}
+
+window.addEventListener("DOMContentLoaded", init);
+</script>
+</body>
+</html>
