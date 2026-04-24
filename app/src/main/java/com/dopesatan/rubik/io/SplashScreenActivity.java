@@ -12,15 +12,23 @@ public class SplashScreenActivity extends AppCompatActivity {
 
     private static final long SPLASH_TIMEOUT_MS = 3000;
 
+    private final Handler splashHandler = new Handler(Looper.getMainLooper());
+    private final Runnable splashRunnable = () -> {
+        startActivity(new Intent(SplashScreenActivity.this, MainActivity.class));
+        finish();
+    };
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_splash);
+        splashHandler.postDelayed(splashRunnable, SPLASH_TIMEOUT_MS);
+    }
 
-        new Handler(Looper.getMainLooper()).postDelayed(() -> {
-            startActivity(new Intent(SplashScreenActivity.this, MainActivity.class));
-            finish();
-        }, SPLASH_TIMEOUT_MS);
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        splashHandler.removeCallbacks(splashRunnable);
     }
 
     @Override
