@@ -1,27 +1,26 @@
 package com.dopesatan.rubik.io;
 
-import androidx.appcompat.app.AppCompatActivity;
-
-import android.graphics.Color;
+import android.content.Intent;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.View;
 
-import gr.net.maroulis.library.EasySplashScreen;
+import androidx.appcompat.app.AppCompatActivity;
 
 public class SplashScreenActivity extends AppCompatActivity {
+
+    private static final long SPLASH_TIMEOUT_MS = 3000;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        EasySplashScreen config = new EasySplashScreen(SplashScreenActivity.this)
-                .withFullScreen()
-                .withTargetActivity(com.dopesatan.rubik.io.MainActivity.class)
-                .withSplashTimeOut(3000)
-                .withBackgroundColor(Color.parseColor("#FFFFFF"))
-                .withLogo(R.mipmap.splash);
-        View easySplashScreen = config.create();
-        setContentView(easySplashScreen);
-        onWindowFocusChanged(true);
+        setContentView(R.layout.activity_splash);
+
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            startActivity(new Intent(SplashScreenActivity.this, MainActivity.class));
+            finish();
+        }, SPLASH_TIMEOUT_MS);
     }
 
     @Override

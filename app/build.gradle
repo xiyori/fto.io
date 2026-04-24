@@ -26,6 +26,11 @@ android {
         sourceCompatibility JavaVersion.VERSION_11
         targetCompatibility JavaVersion.VERSION_11
     }
+    testOptions {
+        unitTests.all {
+            useJUnitPlatform()
+        }
+    }
     namespace 'com.xiyori.fto.io'
     compileSdkMinor 0
 }
@@ -35,12 +40,11 @@ dependencies {
     implementation 'com.google.android.material:material:1.13.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.2.1'
     implementation 'androidx.lifecycle:lifecycle-process:2.10.0'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
     androidTestImplementation 'androidx.test.ext:junit:1.3.0'
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.7.0'
     implementation 'com.github.delight-im:Android-AdvancedWebView:v3.2.1'
     implementation "com.google.android.gms:play-services-games-v2:21.0.0"
-    //noinspection Aligned16KB
-    implementation 'pl.droidsonroids.gif:android-gif-drawable:1.2.31'
     implementation 'com.github.clans:fab:1.6.4'
     constraints {
         implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.2.10") {

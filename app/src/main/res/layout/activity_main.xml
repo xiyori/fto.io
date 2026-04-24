@@ -114,13 +114,14 @@
                     android:layout_alignTop="@+id/bomb"
                     android:layout_marginTop="-100dp"/>
 
-                <pl.droidsonroids.gif.GifImageView
+                <ProgressBar
                     android:id="@+id/bomb"
+                    style="?android:attr/progressBarStyleLarge"
                     android:layout_height="120dp"
-                    android:layout_width="match_parent"
+                    android:layout_width="120dp"
                     android:layout_margin="150px"
                     android:layout_centerInParent="true"
-                    android:src="@drawable/loading" />
+                    android:indeterminate="true" />
 
                 <ImageView
                     android:layout_width="wrap_content"
