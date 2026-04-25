@@ -10,7 +10,7 @@
         <meta-data
             android:name="com.startapp.sdk.APPLICATION_ID"
             android:value="205723033" />
-        <activity android:name="com.dopesatan.rubik.io.SplashScreenActivity"
+        <activity android:name="com.xiyori.fto.io.SplashScreenActivity"
             android:configChanges="orientation"
             android:exported="true"
             android:screenOrientation="portrait">
@@ -20,9 +20,9 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <activity android:name="com.dopesatan.rubik.io.MainActivity"
+        <activity android:name="com.xiyori.fto.io.MainActivity"
             android:configChanges="orientation"
-            android:screenOrientation="portrait"></activity>
+            android:screenOrientation="portrait"/>
         <meta-data
             android:name="com.google.android.gms.ads.APPLICATION_ID"
             android:value="ca-app-pub-5705447777471986~6452898879"/>

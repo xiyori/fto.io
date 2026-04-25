@@ -33,7 +33,7 @@
                     android:layout_height="wrap_content"
                     android:layout_alignParentTop="true"
                     android:layout_centerHorizontal="true"
-                    android:layout_marginTop="150px"
+                    android:layout_marginTop="50dp"
                     android:text="00:00:00"
                     android:textColor="#292929"
                     android:textSize="50dp"
@@ -91,46 +91,11 @@
             android:background="@drawable/button"
             android:layout_alignBottom="@+id/container"
             android:shadowColor="#00FFFFFF"
-            android:layout_margin="25px"
-            android:layout_marginTop="-25px"
+            android:layout_margin="25dp"
+            android:layout_marginTop="-25dp"
             android:stateListAnimator="@null"
-            android:visibility="gone"
             android:textColor="#F2F2F2"
             android:padding="10dp"
             android:text="Shuffle" />
-
-        <RelativeLayout
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:background="#FFFFFF"
-            android:id="@+id/overlay_relative">
-
-                <ImageView
-                    android:layout_width="match_parent"
-                    android:layout_height="200px"
-                    android:layout_centerHorizontal="true"
-                    android:layout_marginHorizontal="120dp"
-                    android:src="@drawable/logo"
-                    android:layout_alignTop="@+id/bomb"
-                    android:layout_marginTop="-100dp"/>
-
-                <pl.droidsonroids.gif.GifImageView
-                    android:id="@+id/bomb"
-                    android:layout_height="120dp"
-                    android:layout_width="match_parent"
-                    android:layout_margin="150px"
-                    android:layout_centerInParent="true"
-                    android:src="@drawable/loading" />
-
-                <ImageView
-                    android:layout_width="wrap_content"
-                    android:layout_height="100px"
-                    android:layout_marginBottom="20dp"
-                    android:layout_marginHorizontal="80dp"
-                    android:layout_centerHorizontal="true"
-                    android:layout_alignParentBottom="true"
-                    android:src="@drawable/brand"/>
-
-        </RelativeLayout>
 
 </RelativeLayout>
