@@ -1,2 +1,2 @@
 include ':app'
-rootProject.name = "Tsunami"
+rootProject.name = "fto.io"
